@@ -1,0 +1,5 @@
+DIRECT APPLY PROOF
+Timestamp: 2026-03-08T01:59:08.127841+00:00
+URL: https://remotive.com/remote-jobs/software-development/senior-full-stack-react-developer-2088644
+Status Code: 200
+Final URL: https://remotive.com/remote-jobs/software-development/senior-full-stack-react-developer-2088644

@@ -1,0 +1,5 @@
+DIRECT APPLY PROOF
+Timestamp: 2026-03-08T02:09:46.190697+00:00
+URL: https://remotive.com/remote-jobs/software-development/senior-python-backend-developer-2088624
+Status Code: 200
+Final URL: https://remotive.com/remote-jobs/software-development/senior-python-backend-developer-2088624

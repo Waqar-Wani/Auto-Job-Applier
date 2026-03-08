@@ -1,0 +1,122 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url("https://fonts.cdnfonts.com/css/geist");
+
+body {
+    margin: 0;
+    font-family: "Geist", "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+code {
+    font-family: "Geist Mono", "Courier New", monospace;
+}
+
+@layer base {
+    :root {
+        --background: 240 18% 5%;
+        --foreground: 210 20% 95%;
+        --card: 222 22% 10%;
+        --card-foreground: 210 20% 95%;
+        --popover: 222 22% 10%;
+        --popover-foreground: 210 20% 95%;
+        --primary: 217 91% 60%;
+        --primary-foreground: 210 40% 98%;
+        --secondary: 236 16% 18%;
+        --secondary-foreground: 210 20% 95%;
+        --muted: 236 16% 18%;
+        --muted-foreground: 217 16% 65%;
+        --accent: 236 16% 18%;
+        --accent-foreground: 210 20% 95%;
+        --destructive: 0 72% 51%;
+        --destructive-foreground: 210 40% 98%;
+        --border: 215 20% 22%;
+        --input: 215 20% 22%;
+        --ring: 217 91% 60%;
+        --chart-1: 217 91% 60%;
+        --chart-2: 262 83% 58%;
+        --chart-3: 160 84% 39%;
+        --chart-4: 48 96% 53%;
+        --chart-5: 0 84% 60%;
+        --radius: 0.5rem;
+    }
+    .dark {
+        --background: 240 18% 5%;
+        --foreground: 210 20% 95%;
+        --card: 222 22% 10%;
+        --card-foreground: 210 20% 95%;
+        --popover: 222 22% 10%;
+        --popover-foreground: 210 20% 95%;
+        --primary: 217 91% 60%;
+        --primary-foreground: 210 40% 98%;
+        --secondary: 236 16% 18%;
+        --secondary-foreground: 210 20% 95%;
+        --muted: 236 16% 18%;
+        --muted-foreground: 217 16% 65%;
+        --accent: 236 16% 18%;
+        --accent-foreground: 210 20% 95%;
+        --destructive: 0 72% 51%;
+        --destructive-foreground: 210 40% 98%;
+        --border: 215 20% 22%;
+        --input: 215 20% 22%;
+        --ring: 217 91% 60%;
+        --chart-1: 217 91% 60%;
+        --chart-2: 262 83% 58%;
+        --chart-3: 160 84% 39%;
+        --chart-4: 48 96% 53%;
+        --chart-5: 0 84% 60%;
+    }
+}
+
+@layer base {
+    * {
+        @apply border-border;
+    }
+    body {
+        @apply bg-background text-foreground;
+        background: #0a0a0f;
+        min-height: 100vh;
+        overflow-x: hidden;
+    }
+}
+
+@layer utilities {
+    .bg-app-bg {
+        background-color: #0a0a0f;
+    }
+}
+
+@layer base {
+    [data-debug-wrapper="true"] {
+        display: contents !important;
+    }
+
+    [data-debug-wrapper="true"] > * {
+        margin-left: inherit;
+        margin-right: inherit;
+        margin-top: inherit;
+        margin-bottom: inherit;
+        padding-left: inherit;
+        padding-right: inherit;
+        padding-top: inherit;
+        padding-bottom: inherit;
+        column-gap: inherit;
+        row-gap: inherit;
+        gap: inherit;
+        border-left-width: inherit;
+        border-right-width: inherit;
+        border-top-width: inherit;
+        border-bottom-width: inherit;
+        border-left-style: inherit;
+        border-right-style: inherit;
+        border-top-style: inherit;
+        border-bottom-style: inherit;
+        border-left-color: inherit;
+        border-right-color: inherit;
+        border-top-color: inherit;
+        border-bottom-color: inherit;
+    }
+}
