@@ -8,18 +8,21 @@ import random
 import re
 import textwrap
 import uuid
+from email.message import EmailMessage
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
+from urllib.parse import urlencode
 
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from docx import Document
 from dotenv import load_dotenv
 from emergentintegrations.llm.chat import LlmChat, UserMessage
-from fastapi import APIRouter, FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, RedirectResponse
 from motor.motor_asyncio import AsyncIOMotorClient
+from playwright.async_api import async_playwright
 from pydantic import BaseModel, Field
 from PyPDF2 import PdfReader
 from reportlab.lib.pagesizes import LETTER
@@ -38,6 +41,10 @@ db = client[os.environ["DB_NAME"]]
 
 DEFAULT_USER_ID = "default-user"
 BACKOFF_MINUTES = [5, 15, 45]
+GMAIL_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send",
+]
 KANBAN_STATUSES = [
     "Discovered",
     "Tailoring",
@@ -95,6 +102,9 @@ class SettingsPayload(BaseModel):
     resend_api_key: str = ""
     sender_email: str = "onboarding@resend.dev"
     notification_email: str = ""
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    gmail_connected: bool = False
     resume_template: Literal["Modern", "Classic", "Minimal"] = "Modern"
 
 
@@ -116,7 +126,10 @@ def utc_now_iso() -> str:
 
 
 def parse_iso(value: str) -> datetime:
-    return datetime.fromisoformat(value)
+    try:
+        return datetime.fromisoformat(value)
+    except Exception:
+        return datetime.now(timezone.utc)
 
 
 def sanitize_doc(doc: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -145,6 +158,57 @@ def safe_int(value: Any, fallback: int = 0) -> int:
 def extract_email_from_text(text: str) -> Optional[str]:
     match = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text or "")
     return match.group(0) if match else None
+
+
+def extract_phone_from_text(text: str) -> str:
+    match = re.search(r"(\+?\d[\d\s\-()]{7,}\d)", text or "")
+    return match.group(1).strip() if match else ""
+
+
+def extract_name_from_resume(resume_text: str) -> str:
+    first_line = (resume_text or "").splitlines()[0].strip() if (resume_text or "").splitlines() else ""
+    if not first_line:
+        return "AutoApply Candidate"
+    if len(first_line) > 60:
+        return "AutoApply Candidate"
+    return first_line
+
+
+def extract_contact_from_profile(profile: Dict[str, Any], default_email: str = "") -> Dict[str, str]:
+    resume_text = profile.get("resume_text", "")
+    email = extract_email_from_text(resume_text) or default_email
+    full_name = extract_name_from_resume(resume_text)
+    parts = [part for part in full_name.split() if part]
+    first_name = parts[0] if parts else "Candidate"
+    last_name = " ".join(parts[1:]) if len(parts) > 1 else ""
+
+    return {
+        "full_name": full_name,
+        "first_name": first_name,
+        "last_name": last_name,
+        "email": email,
+        "phone": extract_phone_from_text(resume_text),
+        "summary": profile.get("parsed", {}).get("summary", ""),
+    }
+
+
+def fallback_email_classification(subject: str, snippet: str) -> Dict[str, str]:
+    text = f"{subject} {snippet}".lower()
+    if any(word in text for word in ["regret", "unfortunately", "not moving forward", "rejected", "decline"]):
+        return {"classification": "rejection", "summary": "Employer declined the application."}
+    if any(word in text for word in ["interview", "schedule", "screen", "availability", "meet"]):
+        return {"classification": "interview", "summary": "Employer is requesting interview scheduling."}
+    if any(word in text for word in ["offer", "congratulations", "pleased to offer"]):
+        return {"classification": "offer", "summary": "Employer sent an offer message."}
+    return {"classification": "no-match", "summary": "No clear hiring stage signal detected."}
+
+
+def encode_email_message(to_email: str, subject: str, body: str) -> str:
+    message = EmailMessage()
+    message["To"] = to_email
+    message["Subject"] = subject
+    message.set_content(body)
+    return base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
 
 
 def wrap_lines(text: str, width: int = 95) -> List[str]:
@@ -380,6 +444,12 @@ async def store_application_if_missing(job_doc: Dict[str, Any]) -> Dict[str, Any
         "recruiter_linkedin": "",
         "interview_datetime": "",
         "proof_url": "",
+        "email_summary_note": "",
+        "followup_draft_subject": "",
+        "followup_draft_body": "",
+        "followup_generated_at": "",
+        "followup_sent_at": "",
+        "followup_message_id": "",
         "created_at": utc_now_iso(),
         "updated_at": utc_now_iso(),
         "last_attempt_at": "",
@@ -512,6 +582,7 @@ async def fetch_adzuna_jobs(preferences: Dict[str, Any], settings: Dict[str, Any
 async def run_job_discovery() -> Dict[str, Any]:
     preferences = await get_preferences()
     settings = await get_settings()
+    profile = await get_profile()
     profile = await get_profile()
 
     remotive_jobs, adzuna_jobs = await asyncio.gather(
@@ -682,29 +753,396 @@ async def send_email_via_resend(
     return {"provider": "resend", "message_id": data.get("id", ""), "raw": data}
 
 
-async def execute_direct_apply(job: Dict[str, Any], application_id: str) -> Dict[str, Any]:
+async def fill_first_available(page: Any, selectors: List[str], value: str) -> bool:
+    if not value:
+        return False
+    for selector in selectors:
+        locator = page.locator(selector)
+        if await locator.count() > 0:
+            await locator.first.fill(value)
+            return True
+    return False
+
+
+async def execute_direct_apply(
+    job: Dict[str, Any],
+    application_id: str,
+    profile: Dict[str, Any],
+    document: Dict[str, Any],
+    default_email: str,
+) -> Dict[str, Any]:
     apply_url = job.get("apply_url")
     if not apply_url:
         raise RuntimeError("No direct apply URL found.")
 
-    async with httpx.AsyncClient(timeout=40.0, follow_redirects=True) as http:
-        response = await http.get(apply_url)
+    resume_path = Path(document.get("resume_pdf_path", ""))
+    if not resume_path.exists():
+        raise RuntimeError("Tailored resume PDF missing for upload.")
 
+    contact = extract_contact_from_profile(profile, default_email=default_email)
+    last_error = ""
     PROOF_DIR.mkdir(parents=True, exist_ok=True)
-    proof_path = PROOF_DIR / f"direct_apply_{application_id}_{int(datetime.now(timezone.utc).timestamp())}.txt"
-    proof_text = (
-        f"DIRECT APPLY PROOF\n"
-        f"Timestamp: {utc_now_iso()}\n"
-        f"URL: {apply_url}\n"
-        f"Status Code: {response.status_code}\n"
-        f"Final URL: {str(response.url)}\n"
+
+    for attempt in range(1, 4):
+        browser = None
+        screenshot_path = PROOF_DIR / f"playwright_apply_{application_id}_attempt_{attempt}.png"
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                page = await browser.new_page()
+                await page.goto(apply_url, wait_until="domcontentloaded", timeout=60000)
+                await page.wait_for_timeout(2000)
+
+                await fill_first_available(
+                    page,
+                    [
+                        "input[name*='first' i]",
+                        "input[id*='first' i]",
+                        "input[placeholder*='first' i]",
+                    ],
+                    contact["first_name"],
+                )
+                await fill_first_available(
+                    page,
+                    [
+                        "input[name*='last' i]",
+                        "input[id*='last' i]",
+                        "input[placeholder*='last' i]",
+                    ],
+                    contact["last_name"],
+                )
+                await fill_first_available(
+                    page,
+                    [
+                        "input[type='email']",
+                        "input[name*='email' i]",
+                        "input[id*='email' i]",
+                    ],
+                    contact["email"],
+                )
+                await fill_first_available(
+                    page,
+                    [
+                        "input[type='tel']",
+                        "input[name*='phone' i]",
+                        "input[id*='phone' i]",
+                    ],
+                    contact["phone"],
+                )
+                await fill_first_available(
+                    page,
+                    [
+                        "input[name*='name' i]",
+                        "input[id*='name' i]",
+                        "input[placeholder*='full name' i]",
+                    ],
+                    contact["full_name"],
+                )
+                await fill_first_available(
+                    page,
+                    [
+                        "textarea[name*='cover' i]",
+                        "textarea[id*='cover' i]",
+                        "textarea[placeholder*='cover' i]",
+                        "textarea[name*='message' i]",
+                    ],
+                    "Please find my tailored resume attached. I am excited to apply for this role.",
+                )
+
+                file_inputs = page.locator("input[type='file']")
+                if await file_inputs.count() > 0:
+                    await file_inputs.first.set_input_files(str(resume_path))
+
+                submit_selectors = [
+                    "button[type='submit']",
+                    "input[type='submit']",
+                    "button:has-text('Apply')",
+                    "button:has-text('Submit')",
+                    "button:has-text('Send')",
+                ]
+                for selector in submit_selectors:
+                    button = page.locator(selector)
+                    if await button.count() > 0:
+                        await button.first.click(force=True)
+                        break
+
+                await page.wait_for_timeout(6000)
+                content = (await page.content()).lower()
+                confirmation = any(
+                    phrase in content
+                    for phrase in ["thank you", "application received", "successfully submitted", "we have received"]
+                )
+
+                await page.screenshot(path=str(screenshot_path), full_page=True)
+                if not confirmation and page.url.rstrip("/") == apply_url.rstrip("/"):
+                    raise RuntimeError("Form submission confirmation was not detected.")
+
+                return {
+                    "provider": "playwright_direct_apply",
+                    "proof_path": str(screenshot_path),
+                    "status_code": 200,
+                    "attempt": attempt,
+                }
+        except Exception as exc:
+            last_error = f"Attempt {attempt}: {exc}"
+            logger.warning("Playwright auto-apply failure for %s: %s", application_id, last_error)
+        finally:
+            if browser:
+                await browser.close()
+
+    raise RuntimeError(last_error or "Playwright auto-apply failed after retries")
+
+
+async def get_gmail_token_doc() -> Optional[Dict[str, Any]]:
+    return await db.gmail_oauth_tokens.find_one({"user_id": DEFAULT_USER_ID}, {"_id": 0})
+
+
+async def ensure_gmail_access_token() -> str:
+    token_doc = await get_gmail_token_doc()
+    if not token_doc:
+        raise RuntimeError("Gmail is not connected.")
+
+    access_token = token_doc.get("access_token", "")
+    expires_at = parse_iso(token_doc.get("expires_at", utc_now_iso()))
+    if access_token and datetime.now(timezone.utc) < (expires_at - timedelta(seconds=90)):
+        return access_token
+
+    refresh_token = token_doc.get("refresh_token", "")
+    settings = await get_settings()
+    if not refresh_token or not settings.get("google_client_id") or not settings.get("google_client_secret"):
+        raise RuntimeError("Gmail refresh token or Google OAuth credentials missing.")
+
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        response = await http.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "client_id": settings.get("google_client_id"),
+                "client_secret": settings.get("google_client_secret"),
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+
+    new_access_token = payload.get("access_token", "")
+    expires_in = safe_int(payload.get("expires_in"), 3600)
+    updated_doc = {
+        "user_id": DEFAULT_USER_ID,
+        "access_token": new_access_token,
+        "refresh_token": refresh_token,
+        "scope": token_doc.get("scope", " ".join(GMAIL_SCOPES)),
+        "token_type": payload.get("token_type", "Bearer"),
+        "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat(),
+        "updated_at": utc_now_iso(),
+    }
+    await db.gmail_oauth_tokens.update_one({"user_id": DEFAULT_USER_ID}, {"$set": updated_doc}, upsert=True)
+    return new_access_token
+
+
+async def classify_email_with_ai(subject: str, sender: str, snippet: str) -> Dict[str, str]:
+    fallback = fallback_email_classification(subject, snippet)
+    prompt = (
+        "Classify this hiring-related email into one label: rejection, interview, offer, no-match. "
+        "Return JSON only with keys: classification, summary. Summary must be <= 140 chars.\n\n"
+        f"SUBJECT: {subject}\nFROM: {sender}\nSNIPPET: {snippet}"
     )
-    proof_path.write_text(proof_text, encoding="utf-8")
+    result = await ai_json_response("You classify recruiting emails.", prompt, fallback)
+    label = str(result.get("classification", fallback["classification"])).lower()
+    if label not in {"rejection", "interview", "offer", "no-match"}:
+        label = fallback["classification"]
+    summary = str(result.get("summary", fallback["summary"]))[:140]
+    return {"classification": label, "summary": summary}
 
-    if response.status_code >= 400:
-        raise RuntimeError(f"Direct apply URL returned {response.status_code}")
 
-    return {"provider": "direct_apply", "proof_path": str(proof_path), "status_code": response.status_code}
+async def find_application_for_email(subject: str, sender: str, snippet: str) -> Optional[Dict[str, Any]]:
+    text = f"{subject} {sender} {snippet}".lower()
+    applications = await db.applications.find({"user_id": DEFAULT_USER_ID}, {"_id": 0}).to_list(500)
+    best_match: Optional[Dict[str, Any]] = None
+    best_score = 0
+
+    for app_doc in applications:
+        score = 0
+        company = (app_doc.get("company") or "").lower()
+        title = (app_doc.get("job_title") or "").lower()
+        if company and company in text:
+            score += 4
+        for token in [tok for tok in re.split(r"\W+", title) if len(tok) > 3][:4]:
+            if token in text:
+                score += 1
+        if score > best_score:
+            best_score = score
+            best_match = app_doc
+
+    return best_match if best_score > 0 else None
+
+
+async def process_gmail_inbox(max_messages: int = 20) -> Dict[str, Any]:
+    token = await ensure_gmail_access_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    processed = 0
+    updated = 0
+
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        inbox_response = await http.get(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+            params={"maxResults": max_messages, "q": "newer_than:7d"},
+            headers=headers,
+        )
+        inbox_response.raise_for_status()
+        message_refs = inbox_response.json().get("messages", [])
+
+        for ref in message_refs:
+            message_id = ref.get("id")
+            if not message_id:
+                continue
+
+            already = await db.gmail_processed_messages.find_one(
+                {"user_id": DEFAULT_USER_ID, "message_id": message_id},
+                {"_id": 0},
+            )
+            if already:
+                continue
+
+            detail_response = await http.get(
+                f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}",
+                params={"format": "metadata", "metadataHeaders": ["Subject", "From", "Date"]},
+                headers=headers,
+            )
+            detail_response.raise_for_status()
+            detail = detail_response.json()
+            headers_list = detail.get("payload", {}).get("headers", [])
+            header_map = {item.get("name", "").lower(): item.get("value", "") for item in headers_list}
+
+            subject = header_map.get("subject", "")
+            sender = header_map.get("from", "")
+            snippet = detail.get("snippet", "")
+
+            classification = await classify_email_with_ai(subject, sender, snippet)
+            app_match = await find_application_for_email(subject, sender, snippet)
+
+            if app_match:
+                status_map = {
+                    "rejection": "Rejected",
+                    "interview": "Interview Scheduled",
+                    "offer": "Offer Received",
+                }
+                next_status = status_map.get(classification["classification"], app_match.get("status", "Applied"))
+                await db.applications.update_one(
+                    {"id": app_match["id"], "user_id": DEFAULT_USER_ID},
+                    {
+                        "$set": {
+                            "status": next_status,
+                            "email_summary_note": classification["summary"],
+                            "last_response_email_subject": subject,
+                            "last_response_email_at": utc_now_iso(),
+                            "updated_at": utc_now_iso(),
+                        }
+                    },
+                )
+                updated += 1
+
+            processed += 1
+            processed_doc = {
+                "id": str(uuid.uuid4()),
+                "user_id": DEFAULT_USER_ID,
+                "message_id": message_id,
+                "subject": subject,
+                "sender": sender,
+                "classification": classification["classification"],
+                "summary": classification["summary"],
+                "processed_at": utc_now_iso(),
+            }
+            await db.gmail_processed_messages.insert_one(processed_doc.copy())
+
+    return {"processed": processed, "applications_updated": updated}
+
+
+async def generate_followup_for_application(application: Dict[str, Any], job: Dict[str, Any]) -> Dict[str, Any]:
+    if application.get("followup_sent_at") or application.get("followup_draft_body"):
+        return {"generated": False, "reason": "follow-up already exists"}
+
+    fallback = {
+        "subject": f"Following up on {application.get('job_title', 'my application')}",
+        "body": (
+            f"Hi {application.get('company', 'Hiring Team')},\n\n"
+            "I hope you're doing well. I wanted to follow up on my recent application and express continued interest "
+            "in the role. I'd be glad to share any additional information if helpful.\n\n"
+            "Thank you for your time.\n"
+        ),
+    }
+
+    prompt = (
+        "Create a concise follow-up email for a job application. Return JSON only with keys subject and body. "
+        "Body must be under 120 words.\n\n"
+        f"JOB_TITLE: {application.get('job_title')}\n"
+        f"COMPANY: {application.get('company')}\n"
+        f"JOB_CONTEXT: {job.get('description', '')[:1200]}"
+    )
+    generated = await ai_json_response("You write concise professional follow-up emails.", prompt, fallback)
+    subject = str(generated.get("subject") or fallback["subject"])[:120]
+    body = str(generated.get("body") or fallback["body"])[:1200]
+
+    await db.applications.update_one(
+        {"id": application["id"], "user_id": DEFAULT_USER_ID},
+        {
+            "$set": {
+                "followup_draft_subject": subject,
+                "followup_draft_body": body,
+                "followup_generated_at": utc_now_iso(),
+                "updated_at": utc_now_iso(),
+            }
+        },
+    )
+    return {"generated": True, "subject": subject}
+
+
+async def generate_due_followups() -> Dict[str, Any]:
+    due_before = datetime.now(timezone.utc) - timedelta(days=3)
+    candidates = await db.applications.find(
+        {
+            "user_id": DEFAULT_USER_ID,
+            "status": "Applied",
+            "followup_sent_at": {"$exists": False},
+            "followup_draft_body": {"$exists": False},
+        },
+        {"_id": 0},
+    ).to_list(500)
+
+    generated_count = 0
+    for app_doc in candidates:
+        reference_time = app_doc.get("last_response_email_at") or app_doc.get("last_attempt_at") or app_doc.get("created_at")
+        if not reference_time:
+            continue
+        if parse_iso(reference_time) > due_before:
+            continue
+
+        job = await db.jobs.find_one({"id": app_doc.get("job_id")}, {"_id": 0})
+        if not job:
+            continue
+        result = await generate_followup_for_application(app_doc, job)
+        if result.get("generated"):
+            generated_count += 1
+
+    return {"generated": generated_count}
+
+
+async def send_followup_via_gmail(application: Dict[str, Any], to_email: str) -> Dict[str, Any]:
+    token = await ensure_gmail_access_token()
+    subject = application.get("followup_draft_subject") or "Following up on my application"
+    body = application.get("followup_draft_body") or "Hello, I wanted to follow up on my recent application."
+    raw = encode_email_message(to_email=to_email, subject=subject, body=body)
+
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        response = await http.post(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"raw": raw},
+        )
+        response.raise_for_status()
+        payload = response.json()
+
+    return payload
 
 
 async def process_one_application(queue_item: Dict[str, Any]) -> Dict[str, Any]:
@@ -725,6 +1163,7 @@ async def process_one_application(queue_item: Dict[str, Any]) -> Dict[str, Any]:
         return {"application_id": application["id"], "success": False, "error": "Job not found"}
 
     settings = await get_settings()
+    profile = await get_profile()
     if settings.get("business_hours_only"):
         now = datetime.now(timezone.utc)
         if now.weekday() >= 5 or now.hour < 9 or now.hour > 17:
@@ -754,7 +1193,13 @@ async def process_one_application(queue_item: Dict[str, Any]) -> Dict[str, Any]:
             success = True
             proof = email_result.get("message_id", "")
         else:
-            direct_result = await execute_direct_apply(job, application["id"])
+            direct_result = await execute_direct_apply(
+                job,
+                application["id"],
+                profile,
+                document,
+                settings.get("notification_email", ""),
+            )
             success = True
             proof = direct_result.get("proof_path", "")
     except Exception as exc:
@@ -864,8 +1309,19 @@ async def scheduled_queue_job() -> None:
         settings = await get_settings()
         if settings.get("auto_apply_enabled"):
             await process_queue(max_items=3, fast_mode=True)
+        await generate_due_followups()
     except Exception as exc:
         logger.error("Scheduled queue processing failed: %s", exc)
+
+
+async def scheduled_gmail_poll_job() -> None:
+    try:
+        settings = await get_settings()
+        if settings.get("gmail_connected"):
+            await process_gmail_inbox(max_messages=25)
+            await generate_due_followups()
+    except Exception as exc:
+        logger.error("Scheduled Gmail poll failed: %s", exc)
 
 
 async def refresh_scheduler() -> None:
@@ -964,6 +1420,110 @@ async def update_settings(payload: SettingsPayload) -> Dict[str, Any]:
     return doc
 
 
+@api_router.get("/gmail/status")
+async def gmail_status() -> Dict[str, Any]:
+    token_doc = await get_gmail_token_doc()
+    connected = bool(token_doc and token_doc.get("access_token"))
+    return {
+        "connected": connected,
+        "expires_at": token_doc.get("expires_at", "") if token_doc else "",
+        "scope": token_doc.get("scope", "") if token_doc else "",
+    }
+
+
+@api_router.get("/gmail/oauth/start")
+async def gmail_oauth_start(request: Request, return_url: str = "") -> Dict[str, str]:
+    settings = await get_settings()
+    client_id = settings.get("google_client_id", "")
+    client_secret = settings.get("google_client_secret", "")
+    if not client_id or not client_secret:
+        raise HTTPException(status_code=400, detail="Add Google Client ID and Secret in Settings first.")
+
+    redirect_uri = f"{str(request.base_url).rstrip('/')}/api/gmail/oauth/callback"
+    state_id = str(uuid.uuid4())
+    state_doc = {
+        "id": state_id,
+        "user_id": DEFAULT_USER_ID,
+        "redirect_uri": redirect_uri,
+        "return_url": return_url or f"{str(request.base_url).rstrip('/')}/settings",
+        "created_at": utc_now_iso(),
+    }
+    await db.gmail_oauth_states.insert_one(state_doc.copy())
+
+    query = urlencode(
+        {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": " ".join(GMAIL_SCOPES),
+            "access_type": "offline",
+            "prompt": "consent",
+            "state": state_id,
+        }
+    )
+    auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{query}"
+    return {"auth_url": auth_url}
+
+
+@api_router.get("/gmail/oauth/callback")
+async def gmail_oauth_callback(code: str = "", state: str = "", error: str = "") -> RedirectResponse:
+    state_doc = await db.gmail_oauth_states.find_one({"id": state}, {"_id": 0})
+    return_url = state_doc.get("return_url", "/settings") if state_doc else "/settings"
+
+    if error:
+        sep = "&" if "?" in return_url else "?"
+        return RedirectResponse(url=f"{return_url}{sep}gmail_error={error}")
+    if not code or not state_doc:
+        sep = "&" if "?" in return_url else "?"
+        return RedirectResponse(url=f"{return_url}{sep}gmail_error=invalid_callback")
+
+    settings = await get_settings()
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            token_response = await http.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "code": code,
+                    "client_id": settings.get("google_client_id", ""),
+                    "client_secret": settings.get("google_client_secret", ""),
+                    "redirect_uri": state_doc.get("redirect_uri", ""),
+                    "grant_type": "authorization_code",
+                },
+            )
+            token_response.raise_for_status()
+            payload = token_response.json()
+    except Exception:
+        sep = "&" if "?" in return_url else "?"
+        return RedirectResponse(url=f"{return_url}{sep}gmail_error=token_exchange_failed")
+
+    expires_in = safe_int(payload.get("expires_in"), 3600)
+    token_doc = {
+        "user_id": DEFAULT_USER_ID,
+        "access_token": payload.get("access_token", ""),
+        "refresh_token": payload.get("refresh_token", ""),
+        "scope": payload.get("scope", " ".join(GMAIL_SCOPES)),
+        "token_type": payload.get("token_type", "Bearer"),
+        "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat(),
+        "updated_at": utc_now_iso(),
+    }
+    await db.gmail_oauth_tokens.update_one({"user_id": DEFAULT_USER_ID}, {"$set": token_doc}, upsert=True)
+    await db.settings.update_one({"user_id": DEFAULT_USER_ID}, {"$set": {"gmail_connected": True, "updated_at": utc_now_iso()}})
+
+    await db.gmail_oauth_states.delete_many({"user_id": DEFAULT_USER_ID})
+    sep = "&" if "?" in return_url else "?"
+    return RedirectResponse(url=f"{return_url}{sep}gmail_connected=1")
+
+
+@api_router.post("/gmail/poll")
+async def gmail_poll_now(max_messages: int = Query(default=20, ge=1, le=100)) -> Dict[str, Any]:
+    try:
+        poll_result = await process_gmail_inbox(max_messages=max_messages)
+        followup_result = await generate_due_followups()
+        return {"gmail_poll": poll_result, "followups": followup_result}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @api_router.post("/jobs/discover")
 async def discover_jobs() -> Dict[str, Any]:
     return await run_job_discovery()
@@ -1028,6 +1588,119 @@ async def run_auto_apply(fast_mode: bool = True) -> Dict[str, Any]:
 async def list_applications() -> List[Dict[str, Any]]:
     applications = await db.applications.find({"user_id": DEFAULT_USER_ID}, {"_id": 0}).sort("created_at", -1).to_list(500)
     return applications
+
+
+@api_router.get("/applications/detail/{application_id}")
+async def application_detail(application_id: str) -> Dict[str, Any]:
+    application = await db.applications.find_one(
+        {"id": application_id, "user_id": DEFAULT_USER_ID},
+        {"_id": 0},
+    )
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    job = await db.jobs.find_one({"id": application.get("job_id")}, {"_id": 0})
+    document = await db.documents.find_one(
+        {"job_id": application.get("job_id"), "user_id": DEFAULT_USER_ID},
+        {"_id": 0},
+        sort=[("created_at", -1)],
+    )
+    attempts = await db.application_attempts.find(
+        {"application_id": application_id},
+        {"_id": 0},
+    ).sort("timestamp", -1).to_list(20)
+
+    proof_available = False
+    proof_path = application.get("proof_url", "")
+    if proof_path and Path(proof_path).exists() and proof_path.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+        proof_available = True
+
+    return {
+        "application": application,
+        "job": job,
+        "latest_document": document,
+        "attempts": attempts,
+        "proof_image_available": proof_available,
+        "proof_image_url": f"/api/applications/detail/{application_id}/proof-screenshot" if proof_available else "",
+    }
+
+
+@api_router.get("/applications/detail/{application_id}/proof-screenshot")
+async def application_proof_screenshot(application_id: str) -> FileResponse:
+    application = await db.applications.find_one(
+        {"id": application_id, "user_id": DEFAULT_USER_ID},
+        {"_id": 0},
+    )
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    proof_path = application.get("proof_url", "")
+    if not proof_path or not Path(proof_path).exists():
+        raise HTTPException(status_code=404, detail="Screenshot not found")
+
+    return FileResponse(proof_path)
+
+
+@api_router.post("/applications/detail/{application_id}/followup/generate")
+async def generate_followup_for_one(application_id: str) -> Dict[str, Any]:
+    application = await db.applications.find_one(
+        {"id": application_id, "user_id": DEFAULT_USER_ID},
+        {"_id": 0},
+    )
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    job = await db.jobs.find_one({"id": application.get("job_id")}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return await generate_followup_for_application(application, job)
+
+
+@api_router.post("/applications/detail/{application_id}/followup/send")
+async def send_followup_for_one(application_id: str) -> Dict[str, Any]:
+    application = await db.applications.find_one(
+        {"id": application_id, "user_id": DEFAULT_USER_ID},
+        {"_id": 0},
+    )
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if application.get("followup_sent_at"):
+        raise HTTPException(status_code=400, detail="Follow-up already sent for this application")
+
+    if not application.get("followup_draft_body"):
+        job = await db.jobs.find_one({"id": application.get("job_id")}, {"_id": 0})
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        await generate_followup_for_application(application, job)
+        application = await db.applications.find_one(
+            {"id": application_id, "user_id": DEFAULT_USER_ID},
+            {"_id": 0},
+        )
+
+    recipient = application.get("recruiter_email")
+    if not recipient:
+        job = await db.jobs.find_one({"id": application.get("job_id")}, {"_id": 0})
+        recipient = (job or {}).get("application_email", "")
+
+    if not recipient:
+        raise HTTPException(status_code=400, detail="No recruiter email available for follow-up")
+
+    try:
+        send_result = await send_followup_via_gmail(application, recipient)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.applications.update_one(
+        {"id": application_id, "user_id": DEFAULT_USER_ID},
+        {
+            "$set": {
+                "followup_sent_at": utc_now_iso(),
+                "followup_message_id": send_result.get("id", ""),
+                "updated_at": utc_now_iso(),
+            }
+        },
+    )
+    return {"sent": True, "message_id": send_result.get("id", "")}
 
 
 @api_router.get("/applications/kanban")
@@ -1122,6 +1795,7 @@ async def startup_event() -> None:
     await db.jobs.create_index([("user_id", 1), ("source", 1), ("external_id", 1)], unique=True)
     await db.applications.create_index([("user_id", 1), ("job_id", 1)], unique=True)
     await db.application_queue.create_index([("application_id", 1), ("status", 1)])
+    await db.gmail_processed_messages.create_index([("user_id", 1), ("message_id", 1)], unique=True)
 
     await get_profile()
     await get_preferences()
@@ -1129,6 +1803,7 @@ async def startup_event() -> None:
 
     if not scheduler.running:
         scheduler.add_job(scheduled_queue_job, trigger="interval", minutes=2, id="queue_job", replace_existing=True)
+        scheduler.add_job(scheduled_gmail_poll_job, trigger="interval", hours=2, id="gmail_poll_job", replace_existing=True)
         await refresh_scheduler()
         scheduler.start()
 

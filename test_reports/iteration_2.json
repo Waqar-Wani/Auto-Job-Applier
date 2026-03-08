@@ -1,0 +1,59 @@
+{
+  "summary": "Executed backend pytest regression for Phase 1 additional features and frontend Playwright checks for Settings + Applications UI integrations. Core requested flows passed for disconnected Gmail preconditions, OAuth start behavior, direct-apply queue invocation path, proof-image detail fields, and follow-up draft/send guardrails.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "/api/jobs/{job_id}/generate-documents",
+        "issue": "Intermittent 500 observed in backend logs: wrap_lines expects string but receives dict from AI output path, causing AttributeError ('dict' object has no attribute 'split').",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "/api/gmail/poll",
+        "issue": "Returns 400 'Gmail is not connected.' when OAuth is not connected (expected in current environment)."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Settings -> Poll Inbox Now",
+        "issue": "User sees error toast when Gmail is not connected (backend 400). UX is functional but depends on OAuth setup.",
+        "affected_selectors": [
+          "[data-testid='settings-gmail-poll-button']"
+        ]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_autoapply_phase1_additional_features.py",
+    "/app/test_reports/pytest/pytest_results_iteration_2.xml"
+  ],
+  "action_items": [
+    "Harden document generation against non-string AI fields (coerce/validate tailored_resume and cover_letter before PDF rendering).",
+    "Fix scheduled 3-day follow-up query logic: current filter uses $exists:false but application docs initialize followup_sent_at/followup_draft_body as empty strings, which can block automatic due-followup generation.",
+    "Re-check direct-apply submit selector strategy to avoid non-application modal buttons (observed retries against remotive dead-link modal Submit button).",
+    "Run a full Gmail connected happy-path test with real OAuth credentials + mailbox to validate classifier-to-kanban mapping end-to-end."
+  ],
+  "critical_code_review_comments": [
+    "run_job_discovery() calls get_profile() twice consecutively (duplicate DB fetch).",
+    "Retry cap semantics likely exceed intent: execute_direct_apply already retries 3 internal browser attempts, then queue-level retry_count allows up to 4 queue attempts (>3 check), amplifying total attempts.",
+    "Automatic follow-up scheduler filter likely dead-path due to $exists:false checks on fields that are always initialized in application records."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_autoapply_phase1_additional_features.py",
+    "/app/test_reports/iteration_2.json"
+  ],
+  "success_rate": {
+    "backend": "90%",
+    "frontend": "92%"
+  },
+  "seed_data_creation": "Used existing discovered jobs/applications in the shared environment; queued a direct-apply candidate and generated follow-up draft on an existing application.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend additional feature suite passed 9/9 at public endpoint. Gmail connected-path and classifier status updates were not validated due missing real OAuth/mailbox credentials. Frontend Settings and Applications controls are visible/clickable via data-testid selectors. One critical intermittent backend 500 was found in logs for generate-documents when AI output type is unexpected.",
+  "rca of the issue": "RCA-1 (generate-documents 500): AI response parser may return a dict under keys expected as strings; create_text_pdf -> wrap_lines() assumes text and calls split(), causing AttributeError. Repro evidence in backend.err.log during POST /api/jobs/{id}/generate-documents. Mitigation: strict type guards and fallback string coercion before PDF generation. RCA-2 (auto follow-up scheduler miss): generate_due_followups filters followup_sent_at and followup_draft_body with $exists:false, but these fields are created as empty strings at application creation; due candidates can be skipped."
+}

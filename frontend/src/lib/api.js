@@ -28,10 +28,20 @@ export const api = {
     client.post(`/applications/queue/${jobId}`).then((res) => res.data),
   runAutoApply: () => client.post("/auto-apply/run").then((res) => res.data),
   getApplications: () => client.get("/applications").then((res) => res.data),
+  getApplicationDetail: (applicationId) =>
+    client.get(`/applications/detail/${applicationId}`).then((res) => res.data),
   getApplicationsKanban: () => client.get("/applications/kanban").then((res) => res.data),
   updateApplicationStatus: (applicationId, status) =>
     client
       .patch(`/applications/${applicationId}/status`, { status })
       .then((res) => res.data),
+  generateFollowupDraft: (applicationId) =>
+    client.post(`/applications/detail/${applicationId}/followup/generate`).then((res) => res.data),
+  sendFollowupDraft: (applicationId) =>
+    client.post(`/applications/detail/${applicationId}/followup/send`).then((res) => res.data),
   getDashboardMetrics: () => client.get("/dashboard/metrics").then((res) => res.data),
+  getGmailStatus: () => client.get("/gmail/status").then((res) => res.data),
+  getGmailOAuthStart: (returnUrl) =>
+    client.get("/gmail/oauth/start", { params: { return_url: returnUrl } }).then((res) => res.data),
+  pollGmailInbox: () => client.post("/gmail/poll").then((res) => res.data),
 };

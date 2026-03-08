@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,14 +8,17 @@ import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
 
 export default function SettingsPage() {
+  const location = useLocation();
   const [settings, setSettings] = useState(null);
+  const [gmailStatus, setGmailStatus] = useState({ connected: false });
   const [error, setError] = useState("");
 
   const loadSettings = async () => {
     try {
       setError("");
-      const result = await api.getSettings();
+      const [result, gmail] = await Promise.all([api.getSettings(), api.getGmailStatus()]);
       setSettings(result);
+      setGmailStatus(gmail);
     } catch {
       setError("Could not load settings.");
     }
@@ -23,6 +27,17 @@ export default function SettingsPage() {
   useEffect(() => {
     loadSettings();
   }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get("gmail_connected") === "1") {
+      toast.success("Gmail connected successfully.");
+      loadSettings();
+    }
+    if (params.get("gmail_error")) {
+      toast.error(`Gmail connect failed: ${params.get("gmail_error")}`);
+    }
+  }, [location.search]);
 
   const save = async () => {
     try {
@@ -44,6 +59,27 @@ export default function SettingsPage() {
       toast.success(`Queue run complete. Processed: ${result.processed}`);
     } catch {
       toast.error("Queue run failed.");
+    }
+  };
+
+  const connectGmail = async () => {
+    try {
+      const returnUrl = `${window.location.origin}/settings`;
+      const result = await api.getGmailOAuthStart(returnUrl);
+      window.location.href = result.auth_url;
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Failed to start Gmail OAuth.");
+    }
+  };
+
+  const pollInbox = async () => {
+    try {
+      const result = await api.pollGmailInbox();
+      toast.success(
+        `Inbox checked: ${result.gmail_poll.processed} messages, ${result.gmail_poll.applications_updated} status updates.`,
+      );
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Gmail polling failed.");
     }
   };
 
@@ -103,6 +139,35 @@ export default function SettingsPage() {
             placeholder="Sender email"
             data-testid="settings-sender-email-input"
           />
+          <Input
+            value={settings.google_client_id || ""}
+            onChange={(e) => setSettings((s) => ({ ...s, google_client_id: e.target.value }))}
+            placeholder="Google OAuth Client ID"
+            data-testid="settings-google-client-id-input"
+          />
+          <Input
+            value={settings.google_client_secret || ""}
+            onChange={(e) => setSettings((s) => ({ ...s, google_client_secret: e.target.value }))}
+            placeholder="Google OAuth Client Secret"
+            data-testid="settings-google-client-secret-input"
+          />
+        </CardContent>
+      </Card>
+
+      <Card className="border-white/10 bg-white/[0.04]" data-testid="settings-gmail-card">
+        <CardHeader>
+          <CardTitle data-testid="settings-gmail-title">Gmail Integration</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-center gap-3">
+          <p className="rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm text-slate-300" data-testid="settings-gmail-status">
+            Status: {gmailStatus.connected ? "Connected" : "Not connected"}
+          </p>
+          <Button onClick={connectGmail} variant="outline" data-testid="settings-gmail-connect-button">
+            Connect Gmail OAuth
+          </Button>
+          <Button onClick={pollInbox} variant="outline" data-testid="settings-gmail-poll-button">
+            Poll Inbox Now
+          </Button>
         </CardContent>
       </Card>
 
