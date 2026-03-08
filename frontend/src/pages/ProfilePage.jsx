@@ -25,23 +25,27 @@ export default function ProfilePage() {
     salary_min: 0,
     salary_max: 250000,
     remote_mode: "remote",
+    blacklisted_companies: [],
+    company_size_preference: "any",
+    application_frequency: "moderate",
+    auto_apply_enabled: false,
   });
 
-const handlePreferencesSave = async () => {
+  const loadData = async () => {
     try {
-      const payload = {
-        ...preferences,
-        target_job_titles: fromCsv(preferences.target_job_titles || ""),
-        preferred_industries: fromCsv(preferences.preferred_industries || ""),
-        location_preferences: fromCsv(preferences.location_preferences || ""),
-        salary_min: Number(preferences.salary_min) || 0,
-        salary_max: Number(preferences.salary_max) || 250000,
-        // ADD THESE MISSING FIELDS:
-        blacklisted_companies: preferences.blacklisted_companies || [],
-        company_size_preference: preferences.company_size_preference || "any",
-        application_frequency: preferences.application_frequency || "moderate",
-        auto_apply_enabled: preferences.auto_apply_enabled || false,
-      };
+      setError("");
+      const [profileRes, preferenceRes] = await Promise.all([api.getProfile(), api.getPreferences()]);
+      setProfile(profileRes);
+      setPreferences({
+        ...preferenceRes,
+        target_job_titles: toCsv(preferenceRes.target_job_titles),
+        preferred_industries: toCsv(preferenceRes.preferred_industries),
+        location_preferences: toCsv(preferenceRes.location_preferences),
+      });
+    } catch {
+      setError("Could not load your profile right now.");
+    }
+  };
 
   useEffect(() => {
     loadData();
@@ -75,7 +79,11 @@ const handlePreferencesSave = async () => {
         preferred_industries: fromCsv(preferences.preferred_industries || ""),
         location_preferences: fromCsv(preferences.location_preferences || ""),
         salary_min: Number(preferences.salary_min) || 0,
-        salary_max: Number(preferences.salary_max) || 0,
+        salary_max: Number(preferences.salary_max) || 250000,
+        blacklisted_companies: preferences.blacklisted_companies || [],
+        company_size_preference: preferences.company_size_preference || "any",
+        application_frequency: preferences.application_frequency || "moderate",
+        auto_apply_enabled: preferences.auto_apply_enabled || false,
       };
       const updated = await api.updatePreferences(payload);
       setPreferences({
