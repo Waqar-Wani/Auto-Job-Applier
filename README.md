@@ -11,11 +11,17 @@
 - Kanban application tracking board (Discovered → Applied → ...)
 - Dashboard with KPIs and source/status/time charts
 
+## Added in this update (Focused Features)
+- **Playwright Auto-Apply:** direct apply flow now uses headless Playwright auto-fill, uploads tailored resume PDF to file inputs, and stores confirmation screenshot path when submission succeeds.
+- **Gmail Response Parsing:** Google OAuth connection from Settings, inbox polling, Claude email classification (`rejection`/`interview`/`offer`/`no-match`), and automatic Kanban status updates with summary notes.
+- **3-Day Follow-Up Drafts:** auto-generates one follow-up draft per application after 3 days without response, shows draft in Application Detail panel, and supports one-click Gmail send.
+
 ## Assumptions made
 - Implemented in the provided React + FastAPI + MongoDB runtime template for compatibility with this environment.
 - A single default user flow is used (no auth module in Phase 1).
 - Remotive is active by default; Adzuna jobs activate after user provides app_id/app_key in Settings.
 - Email auto-apply requires user-provided Resend API key and sender email in Settings.
+- Gmail connected happy-path requires user-provided Google OAuth client credentials in Settings.
 - Direct-apply fallback records proof as a generated artifact when possible.
 
 ## Environment notes

@@ -155,6 +155,18 @@ def safe_int(value: Any, fallback: int = 0) -> int:
         return fallback
 
 
+def ensure_text(value: Any, fallback: str = "") -> str:
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return fallback
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return fallback
+
+
 def extract_email_from_text(text: str) -> Optional[str]:
     match = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text or "")
     return match.group(0) if match else None
@@ -583,7 +595,6 @@ async def run_job_discovery() -> Dict[str, Any]:
     preferences = await get_preferences()
     settings = await get_settings()
     profile = await get_profile()
-    profile = await get_profile()
 
     remotive_jobs, adzuna_jobs = await asyncio.gather(
         fetch_remotive_jobs(preferences),
@@ -681,8 +692,8 @@ async def generate_documents_for_job(job_id: str) -> Dict[str, Any]:
         {"tailored_resume": fallback_resume, "cover_letter": fallback_cover},
     )
 
-    tailored_resume = generated.get("tailored_resume") or fallback_resume
-    cover_letter = generated.get("cover_letter") or fallback_cover
+    tailored_resume = ensure_text(generated.get("tailored_resume"), fallback_resume)
+    cover_letter = ensure_text(generated.get("cover_letter"), fallback_cover)
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     resume_path = GENERATED_DIR / f"resume_{job_id}_{timestamp}.pdf"
@@ -780,117 +791,128 @@ async def execute_direct_apply(
         raise RuntimeError("Tailored resume PDF missing for upload.")
 
     contact = extract_contact_from_profile(profile, default_email=default_email)
-    last_error = ""
     PROOF_DIR.mkdir(parents=True, exist_ok=True)
+    browser = None
+    screenshot_path = PROOF_DIR / f"playwright_apply_{application_id}_{int(datetime.now(timezone.utc).timestamp())}.png"
 
-    for attempt in range(1, 4):
-        browser = None
-        screenshot_path = PROOF_DIR / f"playwright_apply_{application_id}_attempt_{attempt}.png"
-        try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                page = await browser.new_page()
-                await page.goto(apply_url, wait_until="domcontentloaded", timeout=60000)
-                await page.wait_for_timeout(2000)
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
+            await page.goto(apply_url, wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(2000)
 
-                await fill_first_available(
-                    page,
-                    [
-                        "input[name*='first' i]",
-                        "input[id*='first' i]",
-                        "input[placeholder*='first' i]",
-                    ],
-                    contact["first_name"],
-                )
-                await fill_first_available(
-                    page,
-                    [
-                        "input[name*='last' i]",
-                        "input[id*='last' i]",
-                        "input[placeholder*='last' i]",
-                    ],
-                    contact["last_name"],
-                )
-                await fill_first_available(
-                    page,
-                    [
-                        "input[type='email']",
-                        "input[name*='email' i]",
-                        "input[id*='email' i]",
-                    ],
-                    contact["email"],
-                )
-                await fill_first_available(
-                    page,
-                    [
-                        "input[type='tel']",
-                        "input[name*='phone' i]",
-                        "input[id*='phone' i]",
-                    ],
-                    contact["phone"],
-                )
-                await fill_first_available(
-                    page,
-                    [
-                        "input[name*='name' i]",
-                        "input[id*='name' i]",
-                        "input[placeholder*='full name' i]",
-                    ],
-                    contact["full_name"],
-                )
-                await fill_first_available(
-                    page,
-                    [
-                        "textarea[name*='cover' i]",
-                        "textarea[id*='cover' i]",
-                        "textarea[placeholder*='cover' i]",
-                        "textarea[name*='message' i]",
-                    ],
-                    "Please find my tailored resume attached. I am excited to apply for this role.",
-                )
+            await fill_first_available(
+                page,
+                [
+                    "input[name*='first' i]",
+                    "input[id*='first' i]",
+                    "input[placeholder*='first' i]",
+                ],
+                contact["first_name"],
+            )
+            await fill_first_available(
+                page,
+                [
+                    "input[name*='last' i]",
+                    "input[id*='last' i]",
+                    "input[placeholder*='last' i]",
+                ],
+                contact["last_name"],
+            )
+            await fill_first_available(
+                page,
+                [
+                    "input[type='email']",
+                    "input[name*='email' i]",
+                    "input[id*='email' i]",
+                ],
+                contact["email"],
+            )
+            await fill_first_available(
+                page,
+                [
+                    "input[type='tel']",
+                    "input[name*='phone' i]",
+                    "input[id*='phone' i]",
+                ],
+                contact["phone"],
+            )
+            await fill_first_available(
+                page,
+                [
+                    "input[name*='name' i]",
+                    "input[id*='name' i]",
+                    "input[placeholder*='full name' i]",
+                ],
+                contact["full_name"],
+            )
+            await fill_first_available(
+                page,
+                [
+                    "textarea[name*='cover' i]",
+                    "textarea[id*='cover' i]",
+                    "textarea[placeholder*='cover' i]",
+                    "textarea[name*='message' i]",
+                ],
+                "Please find my tailored resume attached. I am excited to apply for this role.",
+            )
 
-                file_inputs = page.locator("input[type='file']")
-                if await file_inputs.count() > 0:
-                    await file_inputs.first.set_input_files(str(resume_path))
+            file_inputs = page.locator("input[type='file']")
+            if await file_inputs.count() > 0:
+                await file_inputs.first.set_input_files(str(resume_path))
 
-                submit_selectors = [
-                    "button[type='submit']",
-                    "input[type='submit']",
-                    "button:has-text('Apply')",
-                    "button:has-text('Submit')",
-                    "button:has-text('Send')",
-                ]
-                for selector in submit_selectors:
-                    button = page.locator(selector)
-                    if await button.count() > 0:
-                        await button.first.click(force=True)
-                        break
+            submitted = False
+            submit_selectors = [
+                "form button[type='submit']",
+                "form input[type='submit']",
+                "button[type='submit']:not([id*='dead-link' i])",
+                "button:has-text('Apply')",
+                "button:has-text('Submit Application')",
+                "button:has-text('Send Application')",
+            ]
 
-                await page.wait_for_timeout(6000)
-                content = (await page.content()).lower()
-                confirmation = any(
-                    phrase in content
-                    for phrase in ["thank you", "application received", "successfully submitted", "we have received"]
-                )
+            for selector in submit_selectors:
+                buttons = page.locator(selector)
+                count = min(await buttons.count(), 5)
+                for idx in range(count):
+                    candidate = buttons.nth(idx)
+                    candidate_id = (await candidate.get_attribute("id") or "").lower()
+                    candidate_text = (await candidate.inner_text() or "").lower().strip()
+                    if "dead-link" in candidate_id or "report" in candidate_id:
+                        continue
+                    if candidate_text and not any(token in candidate_text for token in ["apply", "submit", "send"]):
+                        continue
+                    if not await candidate.is_visible():
+                        continue
+                    await candidate.click(force=True)
+                    submitted = True
+                    break
+                if submitted:
+                    break
 
-                await page.screenshot(path=str(screenshot_path), full_page=True)
-                if not confirmation and page.url.rstrip("/") == apply_url.rstrip("/"):
-                    raise RuntimeError("Form submission confirmation was not detected.")
+            await page.wait_for_timeout(6000)
+            content = (await page.content()).lower()
+            confirmation = any(
+                phrase in content
+                for phrase in ["thank you", "application received", "successfully submitted", "we have received"]
+            )
+            await page.screenshot(path=str(screenshot_path), full_page=True)
 
-                return {
-                    "provider": "playwright_direct_apply",
-                    "proof_path": str(screenshot_path),
-                    "status_code": 200,
-                    "attempt": attempt,
-                }
-        except Exception as exc:
-            last_error = f"Attempt {attempt}: {exc}"
-            logger.warning("Playwright auto-apply failure for %s: %s", application_id, last_error)
-        finally:
-            if browser:
-                await browser.close()
+            if not submitted:
+                raise RuntimeError("No suitable submit button found on application page.")
+            if not confirmation and page.url.rstrip("/") == apply_url.rstrip("/"):
+                raise RuntimeError("Form submission confirmation was not detected.")
 
-    raise RuntimeError(last_error or "Playwright auto-apply failed after retries")
+            return {
+                "provider": "playwright_direct_apply",
+                "proof_path": str(screenshot_path),
+                "status_code": 200,
+                "attempt": 1,
+            }
+    finally:
+        if browser:
+            await browser.close()
 
 
 async def get_gmail_token_doc() -> Optional[Dict[str, Any]]:
@@ -1103,14 +1125,17 @@ async def generate_due_followups() -> Dict[str, Any]:
         {
             "user_id": DEFAULT_USER_ID,
             "status": "Applied",
-            "followup_sent_at": {"$exists": False},
-            "followup_draft_body": {"$exists": False},
         },
         {"_id": 0},
     ).to_list(500)
 
     generated_count = 0
     for app_doc in candidates:
+        if (app_doc.get("followup_sent_at") or "").strip():
+            continue
+        if (app_doc.get("followup_draft_body") or "").strip():
+            continue
+
         reference_time = app_doc.get("last_response_email_at") or app_doc.get("last_attempt_at") or app_doc.get("created_at")
         if not reference_time:
             continue
@@ -1236,7 +1261,7 @@ async def process_one_application(queue_item: Dict[str, Any]) -> Dict[str, Any]:
         return {"application_id": application["id"], "success": True, "method": method}
 
     retry_count = queue_item.get("retry_count", 0) + 1
-    if retry_count > 3:
+    if retry_count >= 3:
         await db.application_queue.update_one(
             {"id": queue_item["id"]},
             {"$set": {"status": "failed", "updated_at": utc_now_iso(), "retry_count": retry_count}},
