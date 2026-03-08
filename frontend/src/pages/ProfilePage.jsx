@@ -27,21 +27,21 @@ export default function ProfilePage() {
     remote_mode: "remote",
   });
 
-  const loadData = async () => {
+const handlePreferencesSave = async () => {
     try {
-      setError("");
-      const [profileRes, preferenceRes] = await Promise.all([api.getProfile(), api.getPreferences()]);
-      setProfile(profileRes);
-      setPreferences({
-        ...preferenceRes,
-        target_job_titles: toCsv(preferenceRes.target_job_titles),
-        preferred_industries: toCsv(preferenceRes.preferred_industries),
-        location_preferences: toCsv(preferenceRes.location_preferences),
-      });
-    } catch {
-      setError("Could not load your profile right now.");
-    }
-  };
+      const payload = {
+        ...preferences,
+        target_job_titles: fromCsv(preferences.target_job_titles || ""),
+        preferred_industries: fromCsv(preferences.preferred_industries || ""),
+        location_preferences: fromCsv(preferences.location_preferences || ""),
+        salary_min: Number(preferences.salary_min) || 0,
+        salary_max: Number(preferences.salary_max) || 250000,
+        // ADD THESE MISSING FIELDS:
+        blacklisted_companies: preferences.blacklisted_companies || [],
+        company_size_preference: preferences.company_size_preference || "any",
+        application_frequency: preferences.application_frequency || "moderate",
+        auto_apply_enabled: preferences.auto_apply_enabled || false,
+      };
 
   useEffect(() => {
     loadData();
