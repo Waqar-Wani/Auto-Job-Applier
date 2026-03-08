@@ -18,7 +18,6 @@ import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from docx import Document
 from dotenv import load_dotenv
-from emergentintegrations.llm.chat import LlmChat, UserMessage
 from fastapi import APIRouter, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 from motor.motor_asyncio import AsyncIOMotorClient
