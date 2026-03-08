@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -8,7 +8,6 @@ import {
   LineChart,
   Pie,
   PieChart,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
@@ -42,14 +41,52 @@ const AnimatedNumber = ({ value }) => {
   return <span>{Math.round(display * 100) / 100}</span>;
 };
 
+const ChartFrame = ({ children, testId }) => {
+  const frameRef = useRef(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    if (!frameRef.current || typeof ResizeObserver === "undefined") return undefined;
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const width = Math.max(0, Math.floor(entry.contentRect.width));
+      const height = Math.max(0, Math.floor(entry.contentRect.height));
+      setSize({ width, height });
+    });
+
+    observer.observe(frameRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div ref={frameRef} className="h-72 w-full" data-testid={testId}>
+      {size.width > 0 && size.height > 0 ? (
+        children(size)
+      ) : (
+        <div className="flex h-full items-center justify-center text-xs text-slate-500" data-testid={`${testId}-loading`}>
+          Loading chart...
+        </div>
+      )}
+    </div>
+  );
+};
+
 export default function DashboardPage() {
   const [metrics, setMetrics] = useState(null);
   const [applications, setApplications] = useState([]);
+  const [error, setError] = useState("");
 
   const loadData = async () => {
-    const [metricRes, appRes] = await Promise.all([api.getDashboardMetrics(), api.getApplications()]);
-    setMetrics(metricRes);
-    setApplications(appRes.slice(0, 8));
+    try {
+      setError("");
+      const [metricRes, appRes] = await Promise.all([api.getDashboardMetrics(), api.getApplications()]);
+      setMetrics(metricRes);
+      setApplications(appRes.slice(0, 8));
+    } catch {
+      setError("Dashboard data failed to load. Please refresh.");
+    }
   };
 
   useEffect(() => {
@@ -84,6 +121,12 @@ export default function DashboardPage() {
         </p>
       </section>
 
+      {error && (
+        <Card className="border-red-500/40 bg-red-500/10" data-testid="dashboard-error-state">
+          <CardContent className="p-4 text-sm text-red-200">{error}</CardContent>
+        </Card>
+      )}
+
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" data-testid="dashboard-kpi-grid">
         {statCards.map((card) => (
           <Card
@@ -110,16 +153,18 @@ export default function DashboardPage() {
           <CardHeader>
             <CardTitle data-testid="applications-over-time-title">Applications Over Time</CardTitle>
           </CardHeader>
-          <CardContent className="h-72" data-testid="applications-over-time-chart">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={timelineData}>
+          <CardContent data-testid="applications-over-time-chart">
+            <ChartFrame testId="applications-over-time-chart-frame">
+              {({ width, height }) => (
+                <LineChart width={width} height={height} data={timelineData}>
                 <CartesianGrid stroke="rgba(255,255,255,0.1)" />
                 <XAxis dataKey="date" stroke="#94a3b8" />
                 <YAxis stroke="#94a3b8" />
                 <Tooltip />
                 <Line type="monotone" dataKey="applications" stroke="#3b82f6" strokeWidth={2} dot={false} />
               </LineChart>
-            </ResponsiveContainer>
+              )}
+            </ChartFrame>
           </CardContent>
         </Card>
 
@@ -127,9 +172,10 @@ export default function DashboardPage() {
           <CardHeader>
             <CardTitle data-testid="status-breakdown-title">Application Status Breakdown</CardTitle>
           </CardHeader>
-          <CardContent className="h-72" data-testid="status-breakdown-chart">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
+          <CardContent data-testid="status-breakdown-chart">
+            <ChartFrame testId="status-breakdown-chart-frame">
+              {({ width, height }) => (
+                <PieChart width={width} height={height}>
                 <Pie data={statusData} dataKey="count" nameKey="status" outerRadius={100}>
                   {statusData.map((entry, index) => (
                     <Cell key={entry.status} fill={COLORS[index % COLORS.length]} />
@@ -137,7 +183,8 @@ export default function DashboardPage() {
                 </Pie>
                 <Tooltip />
               </PieChart>
-            </ResponsiveContainer>
+              )}
+            </ChartFrame>
           </CardContent>
         </Card>
       </section>
@@ -147,16 +194,18 @@ export default function DashboardPage() {
           <CardHeader>
             <CardTitle data-testid="source-breakdown-title">Response Volume by Source</CardTitle>
           </CardHeader>
-          <CardContent className="h-72" data-testid="source-breakdown-chart">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={sourceData}>
+          <CardContent data-testid="source-breakdown-chart">
+            <ChartFrame testId="source-breakdown-chart-frame">
+              {({ width, height }) => (
+                <BarChart width={width} height={height} data={sourceData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
                 <XAxis dataKey="source" stroke="#94a3b8" />
                 <YAxis stroke="#94a3b8" />
                 <Tooltip />
                 <Bar dataKey="count" fill="#3b82f6" radius={[8, 8, 0, 0]} />
               </BarChart>
-            </ResponsiveContainer>
+              )}
+            </ChartFrame>
           </CardContent>
         </Card>
 

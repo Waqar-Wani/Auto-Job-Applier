@@ -17,6 +17,7 @@ export default function ProfilePage() {
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [profile, setProfile] = useState(null);
+  const [error, setError] = useState("");
   const [preferences, setPreferences] = useState({
     target_job_titles: "",
     preferred_industries: "",
@@ -27,14 +28,19 @@ export default function ProfilePage() {
   });
 
   const loadData = async () => {
-    const [profileRes, preferenceRes] = await Promise.all([api.getProfile(), api.getPreferences()]);
-    setProfile(profileRes);
-    setPreferences({
-      ...preferenceRes,
-      target_job_titles: toCsv(preferenceRes.target_job_titles),
-      preferred_industries: toCsv(preferenceRes.preferred_industries),
-      location_preferences: toCsv(preferenceRes.location_preferences),
-    });
+    try {
+      setError("");
+      const [profileRes, preferenceRes] = await Promise.all([api.getProfile(), api.getPreferences()]);
+      setProfile(profileRes);
+      setPreferences({
+        ...preferenceRes,
+        target_job_titles: toCsv(preferenceRes.target_job_titles),
+        preferred_industries: toCsv(preferenceRes.preferred_industries),
+        location_preferences: toCsv(preferenceRes.location_preferences),
+      });
+    } catch {
+      setError("Could not load your profile right now.");
+    }
   };
 
   useEffect(() => {
@@ -89,6 +95,12 @@ export default function ProfilePage() {
       <h2 className="text-4xl font-semibold text-white sm:text-5xl" data-testid="profile-heading">
         Profile & CV Intelligence
       </h2>
+
+      {error && (
+        <Card className="border-red-500/40 bg-red-500/10" data-testid="profile-error-state">
+          <CardContent className="p-4 text-sm text-red-200">{error}</CardContent>
+        </Card>
+      )}
 
       <Card className="border-white/10 bg-white/[0.04]" data-testid="cv-upload-card">
         <CardHeader>

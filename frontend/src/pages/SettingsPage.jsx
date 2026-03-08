@@ -8,10 +8,16 @@ import { api } from "@/lib/api";
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState(null);
+  const [error, setError] = useState("");
 
   const loadSettings = async () => {
-    const result = await api.getSettings();
-    setSettings(result);
+    try {
+      setError("");
+      const result = await api.getSettings();
+      setSettings(result);
+    } catch {
+      setError("Could not load settings.");
+    }
   };
 
   useEffect(() => {
@@ -43,8 +49,15 @@ export default function SettingsPage() {
 
   if (!settings) {
     return (
-      <div className="text-sm text-slate-400" data-testid="settings-loading-state">
-        Loading settings...
+      <div className="space-y-2">
+        {error && (
+          <div className="text-sm text-red-300" data-testid="settings-error-state">
+            {error}
+          </div>
+        )}
+        <div className="text-sm text-slate-400" data-testid="settings-loading-state">
+          Loading settings...
+        </div>
       </div>
     );
   }
@@ -54,6 +67,12 @@ export default function SettingsPage() {
       <h2 className="text-4xl font-semibold text-white sm:text-5xl" data-testid="settings-heading">
         Automation Controls
       </h2>
+
+      {error && (
+        <Card className="border-red-500/40 bg-red-500/10" data-testid="settings-error-card">
+          <CardContent className="p-4 text-sm text-red-200">{error}</CardContent>
+        </Card>
+      )}
 
       <Card className="border-white/10 bg-white/[0.04]" data-testid="settings-credentials-card">
         <CardHeader>

@@ -16,10 +16,16 @@ const STATUSES = [
 
 export default function ApplicationsPage() {
   const [kanban, setKanban] = useState({});
+  const [error, setError] = useState("");
 
   const loadKanban = async () => {
-    const result = await api.getApplicationsKanban();
-    setKanban(result);
+    try {
+      setError("");
+      const result = await api.getApplicationsKanban();
+      setKanban(result);
+    } catch {
+      setError("Could not load application pipeline.");
+    }
   };
 
   useEffect(() => {
@@ -48,6 +54,12 @@ export default function ApplicationsPage() {
         Application Pipeline
       </h2>
 
+      {error && (
+        <Card className="border-red-500/40 bg-red-500/10" data-testid="applications-error-state">
+          <CardContent className="p-4 text-sm text-red-200">{error}</CardContent>
+        </Card>
+      )}
+
       <div className="grid gap-4 lg:grid-cols-4" data-testid="kanban-board-grid">
         {STATUSES.map((status) => (
           <Card
@@ -62,7 +74,7 @@ export default function ApplicationsPage() {
                 {status}
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="max-h-[55vh] space-y-3 overflow-y-auto pr-1" data-testid={`kanban-column-content-${status.toLowerCase().replace(/\s+/g, "-")}`}>
               {(kanban[status] || []).map((item) => (
                 <div
                   key={item.id}

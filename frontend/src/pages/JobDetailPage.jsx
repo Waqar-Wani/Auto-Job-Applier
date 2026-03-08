@@ -10,10 +10,16 @@ export default function JobDetailPage() {
   const { jobId } = useParams();
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   const loadDetail = async () => {
-    const data = await api.getJobDetail(jobId);
-    setDetail(data);
+    try {
+      setError("");
+      const data = await api.getJobDetail(jobId);
+      setDetail(data);
+    } catch {
+      setError("Job detail failed to load.");
+    }
   };
 
   useEffect(() => {
@@ -55,6 +61,12 @@ export default function JobDetailPage() {
 
   return (
     <div className="space-y-6" data-testid="job-detail-page">
+      {error && (
+        <Card className="border-red-500/40 bg-red-500/10" data-testid="job-detail-error-state">
+          <CardContent className="p-4 text-sm text-red-200">{error}</CardContent>
+        </Card>
+      )}
+
       {!job && (
         <Card className="border-white/10 bg-white/[0.03]" data-testid="job-detail-loading-card">
           <CardContent className="p-6 text-sm text-slate-400">Loading job detail...</CardContent>

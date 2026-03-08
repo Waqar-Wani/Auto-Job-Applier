@@ -11,10 +11,16 @@ export default function JobsPage() {
   const [minScore, setMinScore] = useState(0);
   const [source, setSource] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   const loadJobs = async () => {
-    const result = await api.getJobs({ min_score: Number(minScore) || 0, source: source || undefined });
-    setJobs(result);
+    try {
+      setError("");
+      const result = await api.getJobs({ min_score: Number(minScore) || 0, source: source || undefined });
+      setJobs(result);
+    } catch {
+      setError("Could not load jobs. Please try again.");
+    }
   };
 
   useEffect(() => {
@@ -82,6 +88,12 @@ export default function JobsPage() {
           </Button>
         </CardContent>
       </Card>
+
+      {error && (
+        <Card className="border-red-500/40 bg-red-500/10" data-testid="jobs-error-state">
+          <CardContent className="p-4 text-sm text-red-200">{error}</CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-4" data-testid="jobs-list">
         {jobs.length === 0 && (
