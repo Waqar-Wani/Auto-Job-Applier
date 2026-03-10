@@ -823,26 +823,37 @@ async def run_job_discovery() -> Dict[str, Any]:
     remotive_jobs: List[Dict[str, Any]] = []
     adzuna_jobs: List[Dict[str, Any]] = []
     ats_result = DiscoveryRunResult()
+    source_errors: List[str] = []
     discovery_tasks: List[asyncio.Future] = []
     discovery_labels: List[str] = []
 
+    async def safe_call(label: str, coro: Any) -> Dict[str, Any]:
+        try:
+            data = await coro
+            return {"label": label, "data": data, "error": ""}
+        except Exception as exc:  # noqa: BLE001
+            return {"label": label, "data": None, "error": str(exc)}
+
     if remotive_enabled:
-        discovery_tasks.append(fetch_remotive_jobs(preferences))
+        discovery_tasks.append(safe_call("remotive", fetch_remotive_jobs(preferences)))
         discovery_labels.append("remotive")
     if adzuna_enabled:
-        discovery_tasks.append(fetch_adzuna_jobs(preferences, settings))
+        discovery_tasks.append(safe_call("adzuna", fetch_adzuna_jobs(preferences, settings)))
         discovery_labels.append("adzuna")
-    discovery_tasks.append(discover_ats_jobs(preferences, settings))
+    discovery_tasks.append(safe_call("ats", discover_ats_jobs(preferences, settings)))
     discovery_labels.append("ats")
 
     discovery_results = await asyncio.gather(*discovery_tasks)
     for label, result in zip(discovery_labels, discovery_results):
+        if result.get("error"):
+            source_errors.append(f"{label}: {result['error'][:180]}")
+            continue
         if label == "remotive":
-            remotive_jobs = result
+            remotive_jobs = result.get("data") or []
         elif label == "adzuna":
-            adzuna_jobs = result
+            adzuna_jobs = result.get("data") or []
         else:
-            ats_result = result
+            ats_result = result.get("data") or DiscoveryRunResult()
 
     combined = [*remotive_jobs, *adzuna_jobs, *ats_result.jobs]
     deduped: Dict[str, Dict[str, Any]] = {}
@@ -901,6 +912,7 @@ async def run_job_discovery() -> Dict[str, Any]:
         "ats_fetched": ats_result.fetched,
         "ats_returned": ats_result.returned,
         "ats_errors": ats_result.errors[:10],
+        "source_errors": source_errors[:10],
         "source_breakdown": ats_result.per_source_counts,
     }
 
