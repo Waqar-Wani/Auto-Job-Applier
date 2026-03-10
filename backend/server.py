@@ -171,6 +171,11 @@ def extract_email_from_text(text: str) -> Optional[str]:
     return match.group(0) if match else None
 
 
+def extract_email_domain(email: str) -> str:
+    parts = (email or "").strip().lower().split("@", 1)
+    return parts[1] if len(parts) == 2 else ""
+
+
 def extract_phone_from_text(text: str) -> str:
     match = re.search(r"(\+?\d[\d\s\-()]{7,}\d)", text or "")
     return match.group(1).strip() if match else ""
@@ -978,22 +983,55 @@ async def classify_email_with_ai(subject: str, sender: str, snippet: str) -> Dic
 
 async def find_application_for_email(subject: str, sender: str, snippet: str) -> Optional[Dict[str, Any]]:
     text = f"{subject} {sender} {snippet}".lower()
+    sender_email = extract_email_from_text(sender) or ""
+    sender_domain = extract_email_domain(sender_email)
     applications = await db.applications.find({"user_id": DEFAULT_USER_ID}, {"_id": 0}).to_list(500)
     best_match: Optional[Dict[str, Any]] = None
     best_score = 0
 
     for app_doc in applications:
         score = 0
+        company_hit = False
+        domain_hit = False
+        title_hits = 0
+
         company = (app_doc.get("company") or "").lower()
         title = (app_doc.get("job_title") or "").lower()
+
         if company and company in text:
             score += 4
+            company_hit = True
+        for token in [tok for tok in re.split(r"\W+", company) if len(tok) > 3][:3]:
+            if token in text:
+                score += 1
+                company_hit = True
+
+        recruiter_domain = extract_email_domain(app_doc.get("recruiter_email", ""))
+        if sender_domain and recruiter_domain and sender_domain == recruiter_domain:
+            score += 5
+            domain_hit = True
+        elif sender_domain and company:
+            company_tokens = [tok for tok in re.split(r"\W+", company) if len(tok) > 3][:2]
+            if any(tok and tok in sender_domain for tok in company_tokens):
+                score += 2
+                domain_hit = True
+
         for token in [tok for tok in re.split(r"\W+", title) if len(tok) > 3][:4]:
             if token in text:
                 score += 1
+                title_hits += 1
+
         if score > best_score:
             best_score = score
-            best_match = app_doc
+            best_match = {
+                "application": app_doc,
+                "score": score,
+                "company_hit": company_hit,
+                "domain_hit": domain_hit,
+                "title_hits": title_hits,
+                "sender_email": sender_email,
+                "sender_domain": sender_domain,
+            }
 
     return best_match if best_score > 0 else None
 
@@ -1041,6 +1079,9 @@ async def process_gmail_inbox(max_messages: int = 20) -> Dict[str, Any]:
 
             classification = await classify_email_with_ai(subject, sender, snippet)
             app_match = await find_application_for_email(subject, sender, snippet)
+            status_updated = False
+            matched_application_id = ""
+            match_score = 0
 
             if app_match:
                 status_map = {
@@ -1048,20 +1089,42 @@ async def process_gmail_inbox(max_messages: int = 20) -> Dict[str, Any]:
                     "interview": "Interview Scheduled",
                     "offer": "Offer Received",
                 }
-                next_status = status_map.get(classification["classification"], app_match.get("status", "Applied"))
-                await db.applications.update_one(
-                    {"id": app_match["id"], "user_id": DEFAULT_USER_ID},
-                    {
-                        "$set": {
-                            "status": next_status,
-                            "email_summary_note": classification["summary"],
-                            "last_response_email_subject": subject,
-                            "last_response_email_at": utc_now_iso(),
-                            "updated_at": utc_now_iso(),
-                        }
-                    },
+                matched_app = app_match["application"]
+                matched_application_id = matched_app["id"]
+                match_score = app_match["score"]
+                label = classification["classification"]
+                high_confidence = (
+                    app_match["score"] >= 6
+                    and app_match["company_hit"]
+                    and (app_match["domain_hit"] or app_match["title_hits"] >= 2)
                 )
-                updated += 1
+
+                status_can_update = False
+                if label in {"interview", "offer"}:
+                    # Positive stage transitions require strong confidence to avoid false matches.
+                    status_can_update = high_confidence and bool(app_match["sender_domain"])
+                elif label == "rejection":
+                    status_can_update = app_match["score"] >= 5 and app_match["company_hit"]
+
+                update_fields = {
+                    "email_summary_note": classification["summary"],
+                    "last_response_email_subject": subject,
+                    "last_response_email_at": utc_now_iso(),
+                    "last_response_email_sender": sender,
+                    "updated_at": utc_now_iso(),
+                }
+                if app_match["sender_email"] and not matched_app.get("recruiter_email"):
+                    update_fields["recruiter_email"] = app_match["sender_email"]
+                if status_can_update:
+                    update_fields["status"] = status_map.get(label, matched_app.get("status", "Applied"))
+
+                await db.applications.update_one(
+                    {"id": matched_app["id"], "user_id": DEFAULT_USER_ID},
+                    {"$set": update_fields},
+                )
+                if status_can_update:
+                    status_updated = True
+                    updated += 1
 
             processed += 1
             processed_doc = {
@@ -1072,6 +1135,9 @@ async def process_gmail_inbox(max_messages: int = 20) -> Dict[str, Any]:
                 "sender": sender,
                 "classification": classification["classification"],
                 "summary": classification["summary"],
+                "matched_application_id": matched_application_id,
+                "match_score": match_score,
+                "status_updated": status_updated,
                 "processed_at": utc_now_iso(),
             }
             await db.gmail_processed_messages.insert_one(processed_doc.copy())
