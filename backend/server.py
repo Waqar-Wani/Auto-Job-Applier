@@ -130,7 +130,7 @@ class PreferencePayload(BaseModel):
     salary_max: int = 2500000
     company_size_preference: Literal["startup", "mid", "enterprise", "any"] = "any"
     blacklisted_companies: List[str] = Field(default_factory=list)
-    application_frequency: Literal["aggressive", "moderate", "conservative"] = "moderate"
+    application_frequency: Literal["aggressive", "moderate", "conservative", "high"] = "moderate"
     auto_apply_enabled: bool = False
 
 
@@ -1703,6 +1703,9 @@ async def read_preferences() -> Dict[str, Any]:
 @api_router.put("/preferences")
 async def update_preferences(payload: PreferencePayload) -> Dict[str, Any]:
     doc = payload.model_dump()
+    # Backward compatibility for older clients/data that used "high".
+    if doc.get("application_frequency") == "high":
+        doc["application_frequency"] = "aggressive"
     doc.update({"id": str(uuid.uuid4()), "user_id": DEFAULT_USER_ID, "updated_at": utc_now_iso()})
     await db.preferences.update_one({"user_id": DEFAULT_USER_ID}, {"$set": doc}, upsert=True)
     return doc
