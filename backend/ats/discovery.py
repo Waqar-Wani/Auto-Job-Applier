@@ -6,6 +6,23 @@ import httpx
 from .connectors import CONNECTOR_REGISTRY
 from .models import ATSSettings, DiscoveryRunResult, NormalizedJob
 
+CURRENCY_TO_INR = {
+    "INR": 1.0,
+    "USD": 83.0,
+    "EUR": 90.0,
+    "GBP": 105.0,
+    "AED": 22.6,
+    "CAD": 61.0,
+    "AUD": 54.0,
+    "SGD": 62.0,
+    "NZD": 50.0,
+    "CHF": 94.0,
+    "SEK": 8.2,
+    "NOK": 7.8,
+    "JPY": 0.56,
+    "HKD": 10.6,
+}
+
 
 def _to_list(value: Any) -> List[str]:
     if isinstance(value, list):
@@ -83,8 +100,12 @@ def _location_matches(job_location: str, location_preferences: List[str], remote
 def _salary_matches(job: NormalizedJob, pref_min: int, pref_max: int) -> bool:
     if not pref_min and not pref_max:
         return True
-    salary_low = job.salary.min or job.salary.max
-    salary_high = job.salary.max or job.salary.min
+    currency = (job.salary.currency or "INR").upper()
+    rate = CURRENCY_TO_INR.get(currency, 1.0)
+    salary_low_raw = job.salary.min or job.salary.max
+    salary_high_raw = job.salary.max or job.salary.min
+    salary_low = int(salary_low_raw * rate) if salary_low_raw else 0
+    salary_high = int(salary_high_raw * rate) if salary_high_raw else 0
     if not salary_low and not salary_high:
         return True
     if pref_max and salary_low > pref_max:
