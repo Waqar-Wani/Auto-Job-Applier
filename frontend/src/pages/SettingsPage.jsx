@@ -8,6 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
 
 const ATS_SOURCES = ["greenhouse", "lever", "ashby", "workable", "recruitee", "smartrecruiters"];
+const ALL_JOB_SOURCES = ["remotive", "adzuna", ...ATS_SOURCES];
 
 const defaultAtsSources = () => ({
   greenhouse: "",
@@ -253,24 +254,23 @@ export default function SettingsPage() {
 
       <Card className="border-white/10 bg-white/[0.04]" data-testid="settings-ats-card">
         <CardHeader>
-          <CardTitle data-testid="settings-ats-title">ATS Company Sources (Structured APIs)</CardTitle>
+          <CardTitle data-testid="settings-ats-title">Job Sources</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
-          <div className="flex items-center justify-between rounded-lg border border-white/10 bg-black/20 px-3 py-2">
-            <span className="text-sm text-slate-200">Enable Remotive Source</span>
-            <Switch
-              checked={Boolean(sourceToggles.remotive)}
-              onCheckedChange={(checked) => setSourceToggles((prev) => ({ ...prev, remotive: checked }))}
-              data-testid="settings-source-toggle-remotive"
-            />
-          </div>
-          <div className="flex items-center justify-between rounded-lg border border-white/10 bg-black/20 px-3 py-2">
-            <span className="text-sm text-slate-200">Enable Adzuna Source</span>
-            <Switch
-              checked={Boolean(sourceToggles.adzuna)}
-              onCheckedChange={(checked) => setSourceToggles((prev) => ({ ...prev, adzuna: checked }))}
-              data-testid="settings-source-toggle-adzuna"
-            />
+          <div className="grid gap-3 md:col-span-2 md:grid-cols-2">
+            {ALL_JOB_SOURCES.map((source) => (
+              <div
+                key={source}
+                className="flex items-center justify-between rounded-lg border border-white/10 bg-black/20 px-3 py-2"
+              >
+                <span className="text-sm capitalize text-slate-200">Enable {source} Source</span>
+                <Switch
+                  checked={Boolean(sourceToggles[source])}
+                  onCheckedChange={(checked) => setSourceToggles((prev) => ({ ...prev, [source]: checked }))}
+                  data-testid={`settings-source-toggle-${source}`}
+                />
+              </div>
+            ))}
           </div>
           {ATS_SOURCES.map((source) => (
             <div className="space-y-2" key={source}>
@@ -279,12 +279,13 @@ export default function SettingsPage() {
                 value={atsSources[source] || ""}
                 onChange={(e) => setAtsSources((prev) => ({ ...prev, [source]: e.target.value }))}
                 placeholder={`Comma-separated (${source}) companies`}
+                disabled={!sourceToggles[source]}
                 data-testid={`settings-ats-${source}-input`}
               />
             </div>
           ))}
           <p className="text-xs text-slate-500 md:col-span-2">
-            Note: Toggle Remotive/Adzuna source collection on/off here. ATS sources use company slugs (for example: `stripe, notion, airbnb`).
+            Note: Use toggles to enable/disable each source. ATS sources require company slugs (for example: `stripe, notion, airbnb`).
           </p>
         </CardContent>
       </Card>
