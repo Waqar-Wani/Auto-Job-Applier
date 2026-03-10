@@ -812,13 +812,42 @@ async def fetch_adzuna_jobs(preferences: Dict[str, Any], settings: Dict[str, Any
     return jobs
 
 
-async def run_job_discovery() -> Dict[str, Any]:
+ALL_DISCOVERY_SOURCES = {
+    "remotive",
+    "adzuna",
+    "greenhouse",
+    "lever",
+    "ashby",
+    "workable",
+    "recruitee",
+    "smartrecruiters",
+}
+
+ATS_DISCOVERY_SOURCES = {
+    "greenhouse",
+    "lever",
+    "ashby",
+    "workable",
+    "recruitee",
+    "smartrecruiters",
+}
+
+
+async def run_job_discovery(selected_sources: Optional[List[str]] = None) -> Dict[str, Any]:
     preferences = await get_preferences()
     settings = await get_settings()
     profile = await get_profile()
     source_toggles = settings.get("source_toggles", {})
-    remotive_enabled = bool(source_toggles.get("remotive", True))
-    adzuna_enabled = bool(source_toggles.get("adzuna", True))
+    selected = {src.strip().lower() for src in (selected_sources or []) if src}
+
+    if selected:
+        selected = {src for src in selected if src in ALL_DISCOVERY_SOURCES}
+        if not selected:
+            raise HTTPException(status_code=400, detail="No valid discovery sources provided.")
+
+    remotive_enabled = bool(source_toggles.get("remotive", True)) and (not selected or "remotive" in selected)
+    adzuna_enabled = bool(source_toggles.get("adzuna", True)) and (not selected or "adzuna" in selected)
+    ats_selected_sources = sorted([src for src in selected if src in ATS_DISCOVERY_SOURCES]) if selected else None
 
     remotive_jobs: List[Dict[str, Any]] = []
     adzuna_jobs: List[Dict[str, Any]] = []
@@ -840,8 +869,9 @@ async def run_job_discovery() -> Dict[str, Any]:
     if adzuna_enabled:
         discovery_tasks.append(safe_call("adzuna", fetch_adzuna_jobs(preferences, settings)))
         discovery_labels.append("adzuna")
-    discovery_tasks.append(safe_call("ats", discover_ats_jobs(preferences, settings)))
-    discovery_labels.append("ats")
+    if ats_selected_sources is None or len(ats_selected_sources) > 0:
+        discovery_tasks.append(safe_call("ats", discover_ats_jobs(preferences, settings, allowed_sources=ats_selected_sources)))
+        discovery_labels.append("ats")
 
     discovery_results = await asyncio.gather(*discovery_tasks)
     for label, result in zip(discovery_labels, discovery_results):
@@ -865,43 +895,52 @@ async def run_job_discovery() -> Dict[str, Any]:
     created = 0
     updated = 0
     queued = 0
+    processing_errors: List[str] = []
 
     for job in deduped.values():
-        score = score_job_against_profile(job, profile, preferences)
-        salary_norm = normalize_job_salary_to_inr(job)
-        now = utc_now_iso()
-        filter_query = {
-            "user_id": DEFAULT_USER_ID,
-            "source": job["source"],
-            "external_id": job["external_id"],
-        }
+        try:
+            score = score_job_against_profile(job, profile, preferences)
+            salary_norm = normalize_job_salary_to_inr(job)
+            now = utc_now_iso()
+            filter_query = {
+                "user_id": DEFAULT_USER_ID,
+                "source": job.get("source", "unknown"),
+                "external_id": str(job.get("external_id", "")),
+            }
 
-        existing = await db.jobs.find_one(filter_query, {"_id": 0, "id": 1})
-        job_id = existing["id"] if existing else str(uuid.uuid4())
-        job_doc = {
-            "id": job_id,
-            "user_id": DEFAULT_USER_ID,
-            **job,
-            "match_score": score["match_score"],
-            "matched_skills": score["matched_skills"],
-            "score_breakdown": score["score_breakdown"],
-            "salary_currency": salary_norm["salary_currency"],
-            "salary_min_normalized_inr": salary_norm["salary_min_normalized_inr"],
-            "salary_max_normalized_inr": salary_norm["salary_max_normalized_inr"],
-            "updated_at": now,
-            "discovered_at": now,
-        }
+            existing = await db.jobs.find_one(filter_query, {"_id": 0, "id": 1})
+            job_id = existing["id"] if existing else str(uuid.uuid4())
+            job_doc = {
+                "id": job_id,
+                "user_id": DEFAULT_USER_ID,
+                **job,
+                "source": job.get("source", "unknown"),
+                "external_id": str(job.get("external_id", "")),
+                "match_score": score["match_score"],
+                "matched_skills": score["matched_skills"],
+                "score_breakdown": score["score_breakdown"],
+                "salary_currency": salary_norm["salary_currency"],
+                "salary_min_normalized_inr": salary_norm["salary_min_normalized_inr"],
+                "salary_max_normalized_inr": salary_norm["salary_max_normalized_inr"],
+                "updated_at": now,
+                "discovered_at": now,
+            }
 
-        await db.jobs.update_one(filter_query, {"$set": job_doc}, upsert=True)
-        if existing:
-            updated += 1
-        else:
-            created += 1
+            await db.jobs.update_one(filter_query, {"$set": job_doc}, upsert=True)
+            if existing:
+                updated += 1
+            else:
+                created += 1
 
-        application = await store_application_if_missing(job_doc)
-        if settings.get("auto_apply_enabled") and job_doc["match_score"] >= settings.get("score_threshold", 70):
-            await queue_application(application["id"], job_doc["id"])
-            queued += 1
+            application = await store_application_if_missing(job_doc)
+            if settings.get("auto_apply_enabled") and job_doc["match_score"] >= settings.get("score_threshold", 70):
+                await queue_application(application["id"], job_doc["id"])
+                queued += 1
+        except Exception as exc:  # noqa: BLE001
+            processing_errors.append(
+                f"{job.get('source', 'unknown')}:{job.get('external_id', '')} -> {str(exc)[:180]}"
+            )
+            continue
 
     return {
         "fetched": len(combined),
@@ -913,6 +952,7 @@ async def run_job_discovery() -> Dict[str, Any]:
         "ats_returned": ats_result.returned,
         "ats_errors": ats_result.errors[:10],
         "source_errors": source_errors[:10],
+        "processing_errors": processing_errors[:10],
         "source_breakdown": ats_result.per_source_counts,
     }
 
@@ -1898,6 +1938,22 @@ async def gmail_poll_now(max_messages: int = Query(default=20, ge=1, le=100)) ->
 @api_router.post("/jobs/discover")
 async def discover_jobs() -> Dict[str, Any]:
     return await run_job_discovery()
+
+
+@api_router.post("/jobs/discover/{source}")
+async def discover_jobs_by_source(
+    source: Literal[
+        "remotive",
+        "adzuna",
+        "greenhouse",
+        "lever",
+        "ashby",
+        "workable",
+        "recruitee",
+        "smartrecruiters",
+    ],
+) -> Dict[str, Any]:
+    return await run_job_discovery(selected_sources=[source])
 
 
 @api_router.post("/jobs/clear-cache")

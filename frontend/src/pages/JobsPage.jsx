@@ -10,6 +10,7 @@ export default function JobsPage() {
   const [jobs, setJobs] = useState([]);
   const [minScore, setMinScore] = useState(0);
   const [source, setSource] = useState("");
+  const [discoverSource, setDiscoverSource] = useState("all");
   const [discovering, setDiscovering] = useState(false);
   const [clearingCache, setClearingCache] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -35,7 +36,10 @@ export default function JobsPage() {
   const discoverJobs = async () => {
     try {
       setDiscovering(true);
-      const result = await api.discoverJobs();
+      const result =
+        discoverSource === "all"
+          ? await api.discoverJobs()
+          : await api.discoverJobsBySource(discoverSource);
       toast.success(`Discovery complete: ${result.deduped} unique jobs fetched.`);
       await loadJobs();
     } catch {
@@ -86,6 +90,22 @@ export default function JobsPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={discoverSource}
+            onChange={(event) => setDiscoverSource(event.target.value)}
+            className="h-10 rounded-md border border-white/20 bg-black/40 px-3 text-sm text-slate-200"
+            data-testid="jobs-discover-source-select"
+          >
+            <option value="all">Discover: All Sources</option>
+            <option value="remotive">Discover: Remotive</option>
+            <option value="adzuna">Discover: Adzuna</option>
+            <option value="greenhouse">Discover: Greenhouse</option>
+            <option value="lever">Discover: Lever</option>
+            <option value="ashby">Discover: Ashby</option>
+            <option value="workable">Discover: Workable</option>
+            <option value="recruitee">Discover: Recruitee</option>
+            <option value="smartrecruiters">Discover: SmartRecruiters</option>
+          </select>
           <Button variant="outline" onClick={refreshJobs} disabled={refreshing} data-testid="jobs-refresh-button">
             {refreshing ? "Refreshing..." : "Refresh Jobs"}
           </Button>

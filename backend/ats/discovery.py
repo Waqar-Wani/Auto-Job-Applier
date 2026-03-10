@@ -151,10 +151,15 @@ async def _fetch_one_company(
             return source, company, [], str(exc)
 
 
-async def discover_ats_jobs(preferences: Dict[str, Any], settings: Dict[str, Any]) -> DiscoveryRunResult:
+async def discover_ats_jobs(
+    preferences: Dict[str, Any],
+    settings: Dict[str, Any],
+    allowed_sources: List[str] | None = None,
+) -> DiscoveryRunResult:
     ats_settings = parse_ats_settings_from_app_settings(settings)
     if not ats_settings.enabled:
         return DiscoveryRunResult()
+    allowed = {src.strip().lower() for src in (allowed_sources or []) if src}
 
     tasks: List[asyncio.Task] = []
     semaphore = asyncio.Semaphore(max(1, int(ats_settings.concurrency_limit)))
@@ -165,6 +170,8 @@ async def discover_ats_jobs(preferences: Dict[str, Any], settings: Dict[str, Any
 
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
         for source, companies in ats_settings.company_sources.items():
+            if allowed and source not in allowed:
+                continue
             connector = CONNECTOR_REGISTRY.get(source)
             if connector is None:
                 continue
