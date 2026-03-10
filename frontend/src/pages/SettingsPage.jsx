@@ -7,9 +7,28 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
 
+const ATS_SOURCES = ["greenhouse", "lever", "ashby", "workable", "recruitee", "smartrecruiters"];
+
+const defaultAtsSources = () => ({
+  greenhouse: "",
+  lever: "",
+  ashby: "",
+  workable: "",
+  recruitee: "",
+  smartrecruiters: "",
+});
+
+const toCsv = (list) => (Array.isArray(list) ? list.join(", ") : "");
+const fromCsv = (value) =>
+  String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
 export default function SettingsPage() {
   const location = useLocation();
   const [settings, setSettings] = useState(null);
+  const [atsSources, setAtsSources] = useState(defaultAtsSources());
   const [gmailStatus, setGmailStatus] = useState({ connected: false });
   const [error, setError] = useState("");
 
@@ -18,6 +37,15 @@ export default function SettingsPage() {
       setError("");
       const [result, gmail] = await Promise.all([api.getSettings(), api.getGmailStatus()]);
       setSettings(result);
+      const configuredSources = result?.ats_company_sources || {};
+      setAtsSources({
+        greenhouse: toCsv(configuredSources.greenhouse),
+        lever: toCsv(configuredSources.lever),
+        ashby: toCsv(configuredSources.ashby),
+        workable: toCsv(configuredSources.workable),
+        recruitee: toCsv(configuredSources.recruitee),
+        smartrecruiters: toCsv(configuredSources.smartrecruiters),
+      });
       setGmailStatus(gmail);
     } catch {
       setError("Could not load settings.");
@@ -41,11 +69,22 @@ export default function SettingsPage() {
 
   const save = async () => {
     try {
+      const ats_company_sources = {};
+      ATS_SOURCES.forEach((source) => {
+        ats_company_sources[source] = fromCsv(atsSources[source]);
+      });
+
       await api.updateSettings({
         ...settings,
         score_threshold: Number(settings.score_threshold) || 70,
         daily_application_limit: Number(settings.daily_application_limit) || 20,
         discovery_interval_hours: Number(settings.discovery_interval_hours) || 6,
+        ats_company_sources,
+        ats_settings: {
+          ...(settings.ats_settings || {}),
+          enabled: true,
+          company_sources: ats_company_sources,
+        },
       });
       toast.success("Settings updated.");
     } catch {
@@ -191,6 +230,28 @@ export default function SettingsPage() {
           </Button>
           <p className="w-full text-xs text-slate-500">
             Note: OAuth must be connected with Gmail API enabled in Google Cloud. Polling reads recent inbox replies for status updates.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card className="border-white/10 bg-white/[0.04]" data-testid="settings-ats-card">
+        <CardHeader>
+          <CardTitle data-testid="settings-ats-title">ATS Company Sources (Structured APIs)</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4 md:grid-cols-2">
+          {ATS_SOURCES.map((source) => (
+            <div className="space-y-2" key={source}>
+              <p className="text-xs capitalize text-slate-400">{source} Company Slugs</p>
+              <Input
+                value={atsSources[source] || ""}
+                onChange={(e) => setAtsSources((prev) => ({ ...prev, [source]: e.target.value }))}
+                placeholder={`Comma-separated (${source}) companies`}
+                data-testid={`settings-ats-${source}-input`}
+              />
+            </div>
+          ))}
+          <p className="text-xs text-slate-500 md:col-span-2">
+            Note: Add company slugs only (for example: `stripe, notion, airbnb`). Discovery will query each ATS API endpoint automatically.
           </p>
         </CardContent>
       </Card>

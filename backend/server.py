@@ -28,6 +28,10 @@ from reportlab.lib.pagesizes import LETTER
 from reportlab.pdfgen import canvas
 from starlette.middleware.cors import CORSMiddleware
 
+try:
+    from ats.discovery import discover_ats_jobs
+except ImportError:  # pragma: no cover - fallback for alternative module roots
+    from backend.ats.discovery import discover_ats_jobs
 
 ROOT_DIR = Path(__file__).parent
 GENERATED_DIR = ROOT_DIR / "generated_docs"
@@ -146,6 +150,32 @@ class SettingsPayload(BaseModel):
     google_client_secret: str = ""
     gmail_connected: bool = False
     resume_template: Literal["Modern", "Classic", "Minimal"] = "Modern"
+    ats_company_sources: Dict[str, List[str]] = Field(
+        default_factory=lambda: {
+            "greenhouse": [],
+            "lever": [],
+            "ashby": [],
+            "workable": [],
+            "recruitee": [],
+            "smartrecruiters": [],
+        }
+    )
+    ats_settings: Dict[str, Any] = Field(
+        default_factory=lambda: {
+            "enabled": True,
+            "company_sources": {
+                "greenhouse": [],
+                "lever": [],
+                "ashby": [],
+                "workable": [],
+                "recruitee": [],
+                "smartrecruiters": [],
+            },
+            "request_timeout_seconds": 30,
+            "max_companies_per_source": 200,
+            "concurrency_limit": 12,
+        }
+    )
 
 
 class ApplicationStatusUpdate(BaseModel):
@@ -570,9 +600,17 @@ async def get_preferences() -> Dict[str, Any]:
 
 async def get_settings() -> Dict[str, Any]:
     doc = await db.settings.find_one({"user_id": DEFAULT_USER_ID}, {"_id": 0})
-    if doc:
-        return doc
     default_doc = SettingsPayload().model_dump()
+    if doc:
+        changed = False
+        for key, value in default_doc.items():
+            if key not in doc:
+                doc[key] = value
+                changed = True
+        if changed:
+            doc["updated_at"] = utc_now_iso()
+            await db.settings.update_one({"user_id": DEFAULT_USER_ID}, {"$set": doc}, upsert=True)
+        return doc
     default_doc.update({"id": str(uuid.uuid4()), "user_id": DEFAULT_USER_ID, "updated_at": utc_now_iso()})
     await db.settings.insert_one(default_doc.copy())
     return default_doc
@@ -765,12 +803,13 @@ async def run_job_discovery() -> Dict[str, Any]:
     settings = await get_settings()
     profile = await get_profile()
 
-    remotive_jobs, adzuna_jobs = await asyncio.gather(
+    remotive_jobs, adzuna_jobs, ats_result = await asyncio.gather(
         fetch_remotive_jobs(preferences),
         fetch_adzuna_jobs(preferences, settings),
+        discover_ats_jobs(preferences, settings),
     )
 
-    combined = [*remotive_jobs, *adzuna_jobs]
+    combined = [*remotive_jobs, *adzuna_jobs, *ats_result.jobs]
     deduped: Dict[str, Dict[str, Any]] = {}
     for job in combined:
         key = f"{job.get('title', '').lower()}::{job.get('company', '').lower()}::{job.get('location', '').lower()}"
@@ -824,6 +863,10 @@ async def run_job_discovery() -> Dict[str, Any]:
         "created": created,
         "updated": updated,
         "queued": queued,
+        "ats_fetched": ats_result.fetched,
+        "ats_returned": ats_result.returned,
+        "ats_errors": ats_result.errors[:10],
+        "source_breakdown": ats_result.per_source_counts,
     }
 
 
