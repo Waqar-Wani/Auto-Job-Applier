@@ -144,12 +144,24 @@ class AshbyConnector(ATSConnector):
             description = _text(item.get("descriptionHtml")) or _text(item.get("description"))
             location = _text((item.get("location") or {}).get("locationName"))
             comp = item.get("compensation") or {}
-            salary = NormalizedSalary(
-                min=int(comp.get("minValue", 0) or 0),
-                max=int(comp.get("maxValue", 0) or 0),
-                currency=_text(comp.get("currencyCode")),
-                text=_text(comp.get("summary")),
-            )
+            salary = NormalizedSalary()
+            if isinstance(comp, dict):
+                salary = NormalizedSalary(
+                    min=int(comp.get("minValue", 0) or 0),
+                    max=int(comp.get("maxValue", 0) or 0),
+                    currency=_text(comp.get("currencyCode")),
+                    text=_text(comp.get("summary")),
+                )
+            elif isinstance(comp, list) and comp:
+                first = comp[0] if isinstance(comp[0], dict) else {}
+                salary = NormalizedSalary(
+                    min=int(first.get("minValue", 0) or 0),
+                    max=int(first.get("maxValue", 0) or 0),
+                    currency=_text(first.get("currencyCode")),
+                    text=_text(first.get("summary")),
+                )
+            elif isinstance(comp, str):
+                salary = _extract_salary_from_text(comp)
             if not salary.min and not salary.max:
                 salary = _extract_salary_from_text(description)
             output.append(
@@ -278,4 +290,3 @@ CONNECTOR_REGISTRY: Dict[str, ATSConnector] = {
     "recruitee": RecruiteeConnector(),
     "smartrecruiters": SmartRecruitersConnector(),
 }
-
