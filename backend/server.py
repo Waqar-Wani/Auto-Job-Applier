@@ -402,6 +402,12 @@ def extract_contact_from_profile(profile: Dict[str, Any], default_email: str = "
     }
 
 
+def has_auto_apply_channel(job_doc: Dict[str, Any]) -> bool:
+    email = ensure_text(job_doc.get("application_email"), "").strip()
+    apply_url = ensure_text(job_doc.get("apply_url"), "").strip()
+    return bool(email or apply_url)
+
+
 def fallback_email_classification(subject: str, snippet: str) -> Dict[str, str]:
     text = f"{subject} {snippet}".lower()
     if any(word in text for word in ["regret", "unfortunately", "not moving forward", "rejected", "decline"]):
@@ -895,10 +901,15 @@ async def run_job_discovery(selected_sources: Optional[List[str]] = None) -> Dic
     created = 0
     updated = 0
     queued = 0
+    actionable = 0
+    skipped_unactionable = 0
     processing_errors: List[str] = []
 
     for job in deduped.values():
         try:
+            if not has_auto_apply_channel(job):
+                skipped_unactionable += 1
+                continue
             score = score_job_against_profile(job, profile, preferences)
             salary_norm = normalize_job_salary_to_inr(job)
             now = utc_now_iso()
@@ -931,6 +942,7 @@ async def run_job_discovery(selected_sources: Optional[List[str]] = None) -> Dic
                 updated += 1
             else:
                 created += 1
+            actionable += 1
 
             application = await store_application_if_missing(job_doc)
             if settings.get("auto_apply_enabled") and job_doc["match_score"] >= settings.get("score_threshold", 70):
@@ -945,6 +957,8 @@ async def run_job_discovery(selected_sources: Optional[List[str]] = None) -> Dic
     return {
         "fetched": len(combined),
         "deduped": len(deduped),
+        "actionable": actionable,
+        "skipped_unactionable": skipped_unactionable,
         "created": created,
         "updated": updated,
         "queued": queued,
@@ -1963,7 +1977,14 @@ async def clear_jobs_cache_endpoint() -> Dict[str, int]:
 
 @api_router.get("/jobs")
 async def list_jobs(min_score: int = 0, source: str = "") -> List[Dict[str, Any]]:
-    query: Dict[str, Any] = {"user_id": DEFAULT_USER_ID, "match_score": {"$gte": min_score}}
+    query: Dict[str, Any] = {
+        "user_id": DEFAULT_USER_ID,
+        "match_score": {"$gte": min_score},
+        "$or": [
+            {"application_email": {"$exists": True, "$nin": ["", None]}},
+            {"apply_url": {"$exists": True, "$nin": ["", None]}},
+        ],
+    }
     if source:
         query["source"] = source
     jobs = await db.jobs.find(query, {"_id": 0}).sort("match_score", -1).to_list(500)
@@ -2006,6 +2027,8 @@ async def queue_job_application(job_id: str) -> Dict[str, Any]:
     job = await db.jobs.find_one({"id": job_id, "user_id": DEFAULT_USER_ID}, {"_id": 0})
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    if not has_auto_apply_channel(job):
+        raise HTTPException(status_code=400, detail="Job has no auto-apply channel (email/apply link missing)")
     application = await store_application_if_missing(job)
     await queue_application(application["id"], job_id)
     return {"queued": True, "application_id": application["id"], "job_id": job_id}

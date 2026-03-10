@@ -40,7 +40,11 @@ export default function JobsPage() {
         discoverSource === "all"
           ? await api.discoverJobs()
           : await api.discoverJobsBySource(discoverSource);
-      toast.success(`Discovery complete: ${result.deduped} unique jobs fetched.`);
+      toast.success(
+        `Discovery complete: ${result.actionable ?? result.deduped} actionable jobs, ${
+          result.skipped_unactionable ?? 0
+        } skipped without apply channel.`,
+      );
       await loadJobs();
     } catch {
       toast.error("Could not fetch jobs right now.");
@@ -86,7 +90,10 @@ export default function JobsPage() {
             Jobs Feed
           </h2>
           <p className="mt-2 text-sm text-slate-400" data-testid="jobs-subheading">
-            Remotive + Adzuna aggregation with AutoApply scoring.
+            Remotive + ATS aggregation with AutoApply scoring.
+          </p>
+          <p className="mt-1 text-xs text-slate-500" data-testid="jobs-total-count">
+            Total jobs found: {jobs.length} (only jobs with email or apply link are shown)
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
