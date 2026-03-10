@@ -20,6 +20,7 @@ export const api = {
   getSettings: () => client.get("/settings").then((res) => res.data),
   updateSettings: (payload) => client.put("/settings", payload).then((res) => res.data),
   discoverJobs: () => client.post("/jobs/discover").then((res) => res.data),
+  clearJobsCache: () => client.post("/jobs/clear-cache").then((res) => res.data),
   getJobs: (params) => client.get("/jobs", { params }).then((res) => res.data),
   getJobDetail: (jobId) => client.get(`/jobs/${jobId}`).then((res) => res.data),
   generateDocuments: (jobId) =>

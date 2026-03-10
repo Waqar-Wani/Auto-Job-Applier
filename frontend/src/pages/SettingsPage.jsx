@@ -18,6 +18,17 @@ const defaultAtsSources = () => ({
   smartrecruiters: "",
 });
 
+const defaultSourceToggles = () => ({
+  remotive: true,
+  adzuna: true,
+  greenhouse: true,
+  lever: true,
+  ashby: true,
+  workable: true,
+  recruitee: true,
+  smartrecruiters: true,
+});
+
 const toCsv = (list) => (Array.isArray(list) ? list.join(", ") : "");
 const fromCsv = (value) =>
   String(value || "")
@@ -29,6 +40,7 @@ export default function SettingsPage() {
   const location = useLocation();
   const [settings, setSettings] = useState(null);
   const [atsSources, setAtsSources] = useState(defaultAtsSources());
+  const [sourceToggles, setSourceToggles] = useState(defaultSourceToggles());
   const [gmailStatus, setGmailStatus] = useState({ connected: false });
   const [error, setError] = useState("");
 
@@ -45,6 +57,10 @@ export default function SettingsPage() {
         workable: toCsv(configuredSources.workable),
         recruitee: toCsv(configuredSources.recruitee),
         smartrecruiters: toCsv(configuredSources.smartrecruiters),
+      });
+      setSourceToggles({
+        ...defaultSourceToggles(),
+        ...(result?.source_toggles || {}),
       });
       setGmailStatus(gmail);
     } catch {
@@ -79,6 +95,7 @@ export default function SettingsPage() {
         score_threshold: Number(settings.score_threshold) || 70,
         daily_application_limit: Number(settings.daily_application_limit) || 20,
         discovery_interval_hours: Number(settings.discovery_interval_hours) || 6,
+        source_toggles: sourceToggles,
         ats_company_sources,
         ats_settings: {
           ...(settings.ats_settings || {}),
@@ -239,6 +256,22 @@ export default function SettingsPage() {
           <CardTitle data-testid="settings-ats-title">ATS Company Sources (Structured APIs)</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
+          <div className="flex items-center justify-between rounded-lg border border-white/10 bg-black/20 px-3 py-2">
+            <span className="text-sm text-slate-200">Enable Remotive Source</span>
+            <Switch
+              checked={Boolean(sourceToggles.remotive)}
+              onCheckedChange={(checked) => setSourceToggles((prev) => ({ ...prev, remotive: checked }))}
+              data-testid="settings-source-toggle-remotive"
+            />
+          </div>
+          <div className="flex items-center justify-between rounded-lg border border-white/10 bg-black/20 px-3 py-2">
+            <span className="text-sm text-slate-200">Enable Adzuna Source</span>
+            <Switch
+              checked={Boolean(sourceToggles.adzuna)}
+              onCheckedChange={(checked) => setSourceToggles((prev) => ({ ...prev, adzuna: checked }))}
+              data-testid="settings-source-toggle-adzuna"
+            />
+          </div>
           {ATS_SOURCES.map((source) => (
             <div className="space-y-2" key={source}>
               <p className="text-xs capitalize text-slate-400">{source} Company Slugs</p>
@@ -251,7 +284,7 @@ export default function SettingsPage() {
             </div>
           ))}
           <p className="text-xs text-slate-500 md:col-span-2">
-            Note: Add company slugs only (for example: `stripe, notion, airbnb`). Discovery will query each ATS API endpoint automatically.
+            Note: Toggle Remotive/Adzuna source collection on/off here. ATS sources use company slugs (for example: `stripe, notion, airbnb`).
           </p>
         </CardContent>
       </Card>

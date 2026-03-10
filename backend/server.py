@@ -30,8 +30,10 @@ from starlette.middleware.cors import CORSMiddleware
 
 try:
     from ats.discovery import discover_ats_jobs
+    from ats.models import DiscoveryRunResult
 except ImportError:  # pragma: no cover - fallback for alternative module roots
     from backend.ats.discovery import discover_ats_jobs
+    from backend.ats.models import DiscoveryRunResult
 
 ROOT_DIR = Path(__file__).parent
 GENERATED_DIR = ROOT_DIR / "generated_docs"
@@ -174,6 +176,18 @@ class SettingsPayload(BaseModel):
             "request_timeout_seconds": 30,
             "max_companies_per_source": 200,
             "concurrency_limit": 12,
+        }
+    )
+    source_toggles: Dict[str, bool] = Field(
+        default_factory=lambda: {
+            "remotive": True,
+            "adzuna": True,
+            "greenhouse": True,
+            "lever": True,
+            "ashby": True,
+            "workable": True,
+            "recruitee": True,
+            "smartrecruiters": True,
         }
     )
 
@@ -802,12 +816,33 @@ async def run_job_discovery() -> Dict[str, Any]:
     preferences = await get_preferences()
     settings = await get_settings()
     profile = await get_profile()
+    source_toggles = settings.get("source_toggles", {})
+    remotive_enabled = bool(source_toggles.get("remotive", True))
+    adzuna_enabled = bool(source_toggles.get("adzuna", True))
 
-    remotive_jobs, adzuna_jobs, ats_result = await asyncio.gather(
-        fetch_remotive_jobs(preferences),
-        fetch_adzuna_jobs(preferences, settings),
-        discover_ats_jobs(preferences, settings),
-    )
+    remotive_jobs: List[Dict[str, Any]] = []
+    adzuna_jobs: List[Dict[str, Any]] = []
+    ats_result = DiscoveryRunResult()
+    discovery_tasks: List[asyncio.Future] = []
+    discovery_labels: List[str] = []
+
+    if remotive_enabled:
+        discovery_tasks.append(fetch_remotive_jobs(preferences))
+        discovery_labels.append("remotive")
+    if adzuna_enabled:
+        discovery_tasks.append(fetch_adzuna_jobs(preferences, settings))
+        discovery_labels.append("adzuna")
+    discovery_tasks.append(discover_ats_jobs(preferences, settings))
+    discovery_labels.append("ats")
+
+    discovery_results = await asyncio.gather(*discovery_tasks)
+    for label, result in zip(discovery_labels, discovery_results):
+        if label == "remotive":
+            remotive_jobs = result
+        elif label == "adzuna":
+            adzuna_jobs = result
+        else:
+            ats_result = result
 
     combined = [*remotive_jobs, *adzuna_jobs, *ats_result.jobs]
     deduped: Dict[str, Dict[str, Any]] = {}
@@ -867,6 +902,25 @@ async def run_job_discovery() -> Dict[str, Any]:
         "ats_returned": ats_result.returned,
         "ats_errors": ats_result.errors[:10],
         "source_breakdown": ats_result.per_source_counts,
+    }
+
+
+async def clear_jobs_cache() -> Dict[str, int]:
+    job_ids = await db.jobs.find({"user_id": DEFAULT_USER_ID}, {"_id": 0, "id": 1}).to_list(5000)
+    ids = [item.get("id", "") for item in job_ids if item.get("id")]
+
+    delete_jobs_result = await db.jobs.delete_many({"user_id": DEFAULT_USER_ID})
+    delete_docs_result = await db.documents.delete_many({"user_id": DEFAULT_USER_ID, "job_id": {"$in": ids}}) if ids else None
+    delete_queue_result = (
+        await db.application_queue.delete_many({"job_id": {"$in": ids}, "status": {"$in": ["pending", "retrying"]}})
+        if ids
+        else None
+    )
+
+    return {
+        "jobs_deleted": int(delete_jobs_result.deleted_count),
+        "documents_deleted": int(delete_docs_result.deleted_count) if delete_docs_result else 0,
+        "queue_items_deleted": int(delete_queue_result.deleted_count) if delete_queue_result else 0,
     }
 
 
@@ -1832,6 +1886,11 @@ async def gmail_poll_now(max_messages: int = Query(default=20, ge=1, le=100)) ->
 @api_router.post("/jobs/discover")
 async def discover_jobs() -> Dict[str, Any]:
     return await run_job_discovery()
+
+
+@api_router.post("/jobs/clear-cache")
+async def clear_jobs_cache_endpoint() -> Dict[str, int]:
+    return await clear_jobs_cache()
 
 
 @api_router.get("/jobs")

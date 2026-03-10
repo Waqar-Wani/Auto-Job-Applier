@@ -10,16 +10,21 @@ export default function JobsPage() {
   const [jobs, setJobs] = useState([]);
   const [minScore, setMinScore] = useState(0);
   const [source, setSource] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [discovering, setDiscovering] = useState(false);
+  const [clearingCache, setClearingCache] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
 
-  const loadJobs = async () => {
+  const loadJobs = async ({ showRefreshing = false } = {}) => {
     try {
+      if (showRefreshing) setRefreshing(true);
       setError("");
       const result = await api.getJobs({ min_score: Number(minScore) || 0, source: source || undefined });
       setJobs(result);
     } catch {
       setError("Could not load jobs. Please try again.");
+    } finally {
+      if (showRefreshing) setRefreshing(false);
     }
   };
 
@@ -29,14 +34,34 @@ export default function JobsPage() {
 
   const discoverJobs = async () => {
     try {
-      setLoading(true);
+      setDiscovering(true);
       const result = await api.discoverJobs();
       toast.success(`Discovery complete: ${result.deduped} unique jobs fetched.`);
       await loadJobs();
     } catch {
       toast.error("Could not fetch jobs right now.");
     } finally {
-      setLoading(false);
+      setDiscovering(false);
+    }
+  };
+
+  const refreshJobs = async () => {
+    await loadJobs({ showRefreshing: true });
+    toast.success("Jobs list refreshed.");
+  };
+
+  const clearCache = async () => {
+    try {
+      setClearingCache(true);
+      const result = await api.clearJobsCache();
+      await loadJobs();
+      toast.success(
+        `Cache cleared: ${result.jobs_deleted} jobs, ${result.documents_deleted} docs, ${result.queue_items_deleted} queue items.`,
+      );
+    } catch {
+      toast.error("Could not clear jobs cache.");
+    } finally {
+      setClearingCache(false);
     }
   };
 
@@ -60,9 +85,17 @@ export default function JobsPage() {
             Remotive + Adzuna aggregation with AutoApply scoring.
           </p>
         </div>
-        <Button onClick={discoverJobs} disabled={loading} data-testid="jobs-discover-button">
-          {loading ? "Discovering..." : "Discover Jobs Now"}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" onClick={refreshJobs} disabled={refreshing} data-testid="jobs-refresh-button">
+            {refreshing ? "Refreshing..." : "Refresh Jobs"}
+          </Button>
+          <Button variant="outline" onClick={clearCache} disabled={clearingCache} data-testid="jobs-clear-cache-button">
+            {clearingCache ? "Clearing..." : "Clear Job Cache"}
+          </Button>
+          <Button onClick={discoverJobs} disabled={discovering} data-testid="jobs-discover-button">
+            {discovering ? "Discovering..." : "Discover Jobs Now"}
+          </Button>
+        </div>
       </div>
 
       <Card className="border-white/10 bg-white/[0.04]" data-testid="jobs-filters-card">

@@ -39,6 +39,14 @@ def parse_ats_settings_from_app_settings(settings: Dict[str, Any]) -> ATSSetting
             if source in company_sources:
                 merged["company_sources"][source] = _to_list(company_sources.get(source))
         ats_settings = ATSSettings(**merged)
+
+    source_toggles = (settings or {}).get("source_toggles", {})
+    if isinstance(source_toggles, dict):
+        merged = ats_settings.model_dump()
+        for source in merged["company_sources"].keys():
+            if source in source_toggles and not bool(source_toggles.get(source)):
+                merged["company_sources"][source] = []
+        ats_settings = ATSSettings(**merged)
     return ats_settings
 
 
