@@ -115,42 +115,63 @@ export default function SettingsPage() {
           <CardTitle data-testid="settings-credentials-title">API Credentials & Sources</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
-          <Input
-            value={settings.adzuna_app_id || ""}
-            onChange={(e) => setSettings((s) => ({ ...s, adzuna_app_id: e.target.value }))}
-            placeholder="Adzuna App ID"
-            data-testid="settings-adzuna-app-id-input"
-          />
-          <Input
-            value={settings.adzuna_app_key || ""}
-            onChange={(e) => setSettings((s) => ({ ...s, adzuna_app_key: e.target.value }))}
-            placeholder="Adzuna App Key"
-            data-testid="settings-adzuna-app-key-input"
-          />
-          <Input
-            value={settings.resend_api_key || ""}
-            onChange={(e) => setSettings((s) => ({ ...s, resend_api_key: e.target.value }))}
-            placeholder="Resend API Key"
-            data-testid="settings-resend-api-key-input"
-          />
-          <Input
-            value={settings.sender_email || ""}
-            onChange={(e) => setSettings((s) => ({ ...s, sender_email: e.target.value }))}
-            placeholder="Sender email"
-            data-testid="settings-sender-email-input"
-          />
-          <Input
-            value={settings.google_client_id || ""}
-            onChange={(e) => setSettings((s) => ({ ...s, google_client_id: e.target.value }))}
-            placeholder="Google OAuth Client ID"
-            data-testid="settings-google-client-id-input"
-          />
-          <Input
-            value={settings.google_client_secret || ""}
-            onChange={(e) => setSettings((s) => ({ ...s, google_client_secret: e.target.value }))}
-            placeholder="Google OAuth Client Secret"
-            data-testid="settings-google-client-secret-input"
-          />
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Adzuna App ID</p>
+            <Input
+              value={settings.adzuna_app_id || ""}
+              onChange={(e) => setSettings((s) => ({ ...s, adzuna_app_id: e.target.value }))}
+              placeholder="Adzuna App ID"
+              data-testid="settings-adzuna-app-id-input"
+            />
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Adzuna App Key</p>
+            <Input
+              value={settings.adzuna_app_key || ""}
+              onChange={(e) => setSettings((s) => ({ ...s, adzuna_app_key: e.target.value }))}
+              placeholder="Adzuna App Key"
+              data-testid="settings-adzuna-app-key-input"
+            />
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Resend API Key</p>
+            <Input
+              value={settings.resend_api_key || ""}
+              onChange={(e) => setSettings((s) => ({ ...s, resend_api_key: e.target.value }))}
+              placeholder="Resend API Key"
+              data-testid="settings-resend-api-key-input"
+            />
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Sender Email</p>
+            <Input
+              value={settings.sender_email || ""}
+              onChange={(e) => setSettings((s) => ({ ...s, sender_email: e.target.value }))}
+              placeholder="Sender email"
+              data-testid="settings-sender-email-input"
+            />
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Google OAuth Client ID</p>
+            <Input
+              value={settings.google_client_id || ""}
+              onChange={(e) => setSettings((s) => ({ ...s, google_client_id: e.target.value }))}
+              placeholder="Google OAuth Client ID"
+              data-testid="settings-google-client-id-input"
+            />
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Google OAuth Client Secret</p>
+            <Input
+              value={settings.google_client_secret || ""}
+              onChange={(e) => setSettings((s) => ({ ...s, google_client_secret: e.target.value }))}
+              placeholder="Google OAuth Client Secret"
+              data-testid="settings-google-client-secret-input"
+            />
+          </div>
+          <p className="text-xs text-slate-500 md:col-span-2">
+            Note: Save settings after updating keys. Rotate leaked keys immediately and avoid sharing screenshots with secrets.
+          </p>
         </CardContent>
       </Card>
 
@@ -168,6 +189,9 @@ export default function SettingsPage() {
           <Button onClick={pollInbox} variant="outline" data-testid="settings-gmail-poll-button">
             Poll Inbox Now
           </Button>
+          <p className="w-full text-xs text-slate-500">
+            Note: OAuth must be connected with Gmail API enabled in Google Cloud. Polling reads recent inbox replies for status updates.
+          </p>
         </CardContent>
       </Card>
 
@@ -176,33 +200,45 @@ export default function SettingsPage() {
           <CardTitle data-testid="settings-automation-title">Auto-Apply Rules</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
-          <Input
-            type="number"
-            value={settings.score_threshold}
-            onChange={(e) => setSettings((s) => ({ ...s, score_threshold: e.target.value }))}
-            placeholder="Score threshold"
-            data-testid="settings-score-threshold-input"
-          />
-          <Input
-            type="number"
-            value={settings.daily_application_limit}
-            onChange={(e) => setSettings((s) => ({ ...s, daily_application_limit: e.target.value }))}
-            placeholder="Daily application limit"
-            data-testid="settings-daily-limit-input"
-          />
-          <Input
-            type="number"
-            value={settings.discovery_interval_hours}
-            onChange={(e) => setSettings((s) => ({ ...s, discovery_interval_hours: e.target.value }))}
-            placeholder="Discovery interval (hours)"
-            data-testid="settings-discovery-interval-input"
-          />
-          <Input
-            value={settings.resume_template}
-            onChange={(e) => setSettings((s) => ({ ...s, resume_template: e.target.value }))}
-            placeholder="Resume template (Modern/Classic/Minimal)"
-            data-testid="settings-template-input"
-          />
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Score Threshold (%)</p>
+            <Input
+              type="number"
+              value={settings.score_threshold}
+              onChange={(e) => setSettings((s) => ({ ...s, score_threshold: e.target.value }))}
+              placeholder="Score threshold"
+              data-testid="settings-score-threshold-input"
+            />
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Daily Application Limit</p>
+            <Input
+              type="number"
+              value={settings.daily_application_limit}
+              onChange={(e) => setSettings((s) => ({ ...s, daily_application_limit: e.target.value }))}
+              placeholder="Daily application limit"
+              data-testid="settings-daily-limit-input"
+            />
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Discovery Interval (hours)</p>
+            <Input
+              type="number"
+              value={settings.discovery_interval_hours}
+              onChange={(e) => setSettings((s) => ({ ...s, discovery_interval_hours: e.target.value }))}
+              placeholder="Discovery interval (hours)"
+              data-testid="settings-discovery-interval-input"
+            />
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Resume Template</p>
+            <Input
+              value={settings.resume_template}
+              onChange={(e) => setSettings((s) => ({ ...s, resume_template: e.target.value }))}
+              placeholder="Resume template (Modern/Classic/Minimal)"
+              data-testid="settings-template-input"
+            />
+          </div>
 
           <div className="flex items-center justify-between rounded-lg border border-white/10 bg-black/20 px-3 py-2" data-testid="settings-auto-apply-toggle-row">
             <span className="text-sm text-slate-200" data-testid="settings-auto-apply-label">
@@ -225,6 +261,9 @@ export default function SettingsPage() {
               data-testid="settings-business-hours-toggle"
             />
           </div>
+          <p className="text-xs text-slate-500 md:col-span-2">
+            Note: Use Business Hours Only if you want queued applications to run only during standard office hours.
+          </p>
         </CardContent>
       </Card>
 

@@ -70,22 +70,31 @@ export default function JobsPage() {
           <CardTitle data-testid="jobs-filters-title">Filters</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
-          <Input
-            type="number"
-            value={minScore}
-            onChange={(e) => setMinScore(e.target.value)}
-            placeholder="Minimum score"
-            data-testid="jobs-min-score-input"
-          />
-          <Input
-            value={source}
-            onChange={(e) => setSource(e.target.value)}
-            placeholder="Source (remotive / adzuna)"
-            data-testid="jobs-source-input"
-          />
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Minimum Match Score</p>
+            <Input
+              type="number"
+              value={minScore}
+              onChange={(e) => setMinScore(e.target.value)}
+              placeholder="Minimum score"
+              data-testid="jobs-min-score-input"
+            />
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Job Source</p>
+            <Input
+              value={source}
+              onChange={(e) => setSource(e.target.value)}
+              placeholder="Source (remotive / adzuna)"
+              data-testid="jobs-source-input"
+            />
+          </div>
           <Button onClick={loadJobs} data-testid="jobs-apply-filters-button">
             Apply Filters
           </Button>
+          <p className="text-xs text-slate-500 md:col-span-3">
+            Note: Leave source blank to include all sources.
+          </p>
         </CardContent>
       </Card>
 

@@ -23,7 +23,7 @@ export default function ProfilePage() {
     preferred_industries: "",
     location_preferences: "",
     salary_min: 0,
-    salary_max: 250000,
+    salary_max: 2500000,
     remote_mode: "remote",
     blacklisted_companies: [],
     company_size_preference: "any",
@@ -79,7 +79,7 @@ export default function ProfilePage() {
         preferred_industries: fromCsv(preferences.preferred_industries || ""),
         location_preferences: fromCsv(preferences.location_preferences || ""),
         salary_min: Number(preferences.salary_min) || 0,
-        salary_max: Number(preferences.salary_max) || 250000,
+        salary_max: Number(preferences.salary_max) || 2500000,
         blacklisted_companies: preferences.blacklisted_companies || [],
         company_size_preference: preferences.company_size_preference || "any",
         application_frequency: preferences.application_frequency || "moderate",
@@ -115,12 +115,16 @@ export default function ProfilePage() {
           <CardTitle data-testid="cv-upload-title">Upload Resume (PDF / DOCX)</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          <p className="text-xs text-slate-400">Resume File</p>
           <Input
             type="file"
             accept=".pdf,.docx"
             onChange={(event) => setFile(event.target.files?.[0] || null)}
             data-testid="cv-file-input"
           />
+          <p className="text-xs text-slate-500">
+            Note: CV parsing extracts skills and summary, then job discovery uses this profile for scoring.
+          </p>
           <Button onClick={handleUpload} disabled={uploading} data-testid="cv-upload-button">
             {uploading ? "Parsing CV..." : "Upload and Parse CV"}
           </Button>
@@ -147,44 +151,65 @@ export default function ProfilePage() {
           <CardTitle data-testid="preferences-title">Job Preferences</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
-          <Input
-            value={preferences.target_job_titles || ""}
-            onChange={(e) => setPreferences((s) => ({ ...s, target_job_titles: e.target.value }))}
-            placeholder="Target titles (comma-separated)"
-            data-testid="preferences-target-titles-input"
-          />
-          <Input
-            value={preferences.preferred_industries || ""}
-            onChange={(e) => setPreferences((s) => ({ ...s, preferred_industries: e.target.value }))}
-            placeholder="Preferred industries"
-            data-testid="preferences-industries-input"
-          />
-          <Input
-            value={preferences.location_preferences || ""}
-            onChange={(e) => setPreferences((s) => ({ ...s, location_preferences: e.target.value }))}
-            placeholder="Locations"
-            data-testid="preferences-locations-input"
-          />
-          <Input
-            value={preferences.remote_mode || "remote"}
-            onChange={(e) => setPreferences((s) => ({ ...s, remote_mode: e.target.value }))}
-            placeholder="remote / hybrid / onsite / any"
-            data-testid="preferences-remote-mode-input"
-          />
-          <Input
-            type="number"
-            value={preferences.salary_min || 0}
-            onChange={(e) => setPreferences((s) => ({ ...s, salary_min: e.target.value }))}
-            placeholder="Minimum salary"
-            data-testid="preferences-salary-min-input"
-          />
-          <Input
-            type="number"
-            value={preferences.salary_max || 0}
-            onChange={(e) => setPreferences((s) => ({ ...s, salary_max: e.target.value }))}
-            placeholder="Maximum salary"
-            data-testid="preferences-salary-max-input"
-          />
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Target Job Titles</p>
+            <Input
+              value={preferences.target_job_titles || ""}
+              onChange={(e) => setPreferences((s) => ({ ...s, target_job_titles: e.target.value }))}
+              placeholder="Target titles (comma-separated)"
+              data-testid="preferences-target-titles-input"
+            />
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Preferred Industries</p>
+            <Input
+              value={preferences.preferred_industries || ""}
+              onChange={(e) => setPreferences((s) => ({ ...s, preferred_industries: e.target.value }))}
+              placeholder="Preferred industries"
+              data-testid="preferences-industries-input"
+            />
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Location Preferences</p>
+            <Input
+              value={preferences.location_preferences || ""}
+              onChange={(e) => setPreferences((s) => ({ ...s, location_preferences: e.target.value }))}
+              placeholder="Locations"
+              data-testid="preferences-locations-input"
+            />
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Remote Mode</p>
+            <Input
+              value={preferences.remote_mode || "remote"}
+              onChange={(e) => setPreferences((s) => ({ ...s, remote_mode: e.target.value }))}
+              placeholder="remote / hybrid / onsite / any"
+              data-testid="preferences-remote-mode-input"
+            />
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Minimum Salary (INR)</p>
+            <Input
+              type="number"
+              value={preferences.salary_min || 0}
+              onChange={(e) => setPreferences((s) => ({ ...s, salary_min: e.target.value }))}
+              placeholder="Minimum salary (INR yearly or LPA like 12)"
+              data-testid="preferences-salary-min-input"
+            />
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Maximum Salary (INR)</p>
+            <Input
+              type="number"
+              value={preferences.salary_max || 0}
+              onChange={(e) => setPreferences((s) => ({ ...s, salary_max: e.target.value }))}
+              placeholder="Maximum salary (INR yearly or LPA like 30)"
+              data-testid="preferences-salary-max-input"
+            />
+          </div>
+          <p className="text-xs text-slate-500 md:col-span-2">
+            Note: Salary inputs accept INR yearly amount or LPA shorthand (example: 12 = 12 LPA).
+          </p>
           <div className="md:col-span-2">
             <Button onClick={handlePreferencesSave} data-testid="preferences-save-button">
               Save Preferences

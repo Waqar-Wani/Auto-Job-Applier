@@ -55,6 +55,47 @@ KANBAN_STATUSES = [
     "Withdrawn",
 ]
 
+# Approximate FX map for salary normalization (base: 1 unit of currency -> INR).
+CURRENCY_TO_INR = {
+    "INR": 1.0,
+    "USD": 83.0,
+    "EUR": 90.0,
+    "GBP": 105.0,
+    "AED": 22.6,
+    "CAD": 61.0,
+    "AUD": 54.0,
+    "SGD": 62.0,
+    "NZD": 50.0,
+    "CHF": 94.0,
+    "SEK": 8.2,
+    "NOK": 7.8,
+    "JPY": 0.56,
+    "HKD": 10.6,
+}
+
+ADZUNA_COUNTRY_CURRENCY = {
+    "in": "INR",
+    "us": "USD",
+    "gb": "GBP",
+    "au": "AUD",
+    "ca": "CAD",
+    "sg": "SGD",
+    "fr": "EUR",
+    "de": "EUR",
+    "nl": "EUR",
+    "be": "EUR",
+    "es": "EUR",
+    "it": "EUR",
+    "at": "EUR",
+    "ch": "CHF",
+    "se": "SEK",
+    "no": "NOK",
+    "nz": "NZD",
+    "ae": "AED",
+    "jp": "JPY",
+    "hk": "HKD",
+}
+
 
 class ParsedProfile(BaseModel):
     skills_technical: List[str] = Field(default_factory=list)
@@ -82,7 +123,7 @@ class PreferencePayload(BaseModel):
     location_preferences: List[str] = Field(default_factory=lambda: ["Remote"])
     remote_mode: Literal["remote", "hybrid", "onsite", "any"] = "remote"
     salary_min: int = 0
-    salary_max: int = 250000
+    salary_max: int = 2500000
     company_size_preference: Literal["startup", "mid", "enterprise", "any"] = "any"
     blacklisted_companies: List[str] = Field(default_factory=list)
     application_frequency: Literal["aggressive", "moderate", "conservative"] = "moderate"
@@ -152,6 +193,115 @@ def safe_int(value: Any, fallback: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return fallback
+
+
+def normalize_lpa_or_annual_inr(value: Any) -> int:
+    amount = safe_int(value, 0)
+    if amount <= 0:
+        return 0
+    # Heuristic: user enters LPA for INR in small ranges like 8, 12, 25.
+    if amount <= 500:
+        return amount * 100000
+    return amount
+
+
+def detect_currency_from_text(text: str, fallback: str = "") -> str:
+    lowered = (text or "").lower()
+    if any(tok in lowered for tok in ["inr", "₹", "lpa", "lakh"]):
+        return "INR"
+    if any(tok in lowered for tok in ["usd", "us$", "$"]):
+        return "USD"
+    if any(tok in lowered for tok in ["eur", "€"]):
+        return "EUR"
+    if any(tok in lowered for tok in ["gbp", "£"]):
+        return "GBP"
+    if "aed" in lowered:
+        return "AED"
+    if "cad" in lowered:
+        return "CAD"
+    if "aud" in lowered:
+        return "AUD"
+    if "sgd" in lowered:
+        return "SGD"
+    if "jpy" in lowered or "¥" in lowered:
+        return "JPY"
+    if "chf" in lowered:
+        return "CHF"
+    if "sek" in lowered:
+        return "SEK"
+    if "nok" in lowered:
+        return "NOK"
+    if "hkd" in lowered:
+        return "HKD"
+    if "nzd" in lowered:
+        return "NZD"
+    return (fallback or "").upper()
+
+
+def convert_salary_to_inr(amount: Any, currency: str) -> int:
+    raw = safe_int(amount, 0)
+    if raw <= 0:
+        return 0
+    rate = CURRENCY_TO_INR.get((currency or "INR").upper(), 1.0)
+    return int(raw * rate)
+
+
+def convert_inr_to_currency(amount_inr: int, currency: str) -> int:
+    if amount_inr <= 0:
+        return 0
+    rate = CURRENCY_TO_INR.get((currency or "INR").upper(), 1.0)
+    if rate <= 0:
+        return amount_inr
+    return int(amount_inr / rate)
+
+
+def parse_salary_range_from_text(salary_text: str) -> Dict[str, int]:
+    text = (salary_text or "").strip()
+    if not text:
+        return {"min": 0, "max": 0}
+
+    lowered = text.lower()
+    is_lpa = "lpa" in lowered or "lakh" in lowered
+    matches = re.findall(r"(\d+(?:[.,]\d+)?)\s*([kKmM]?)", text)
+    values: List[int] = []
+    for number_text, suffix in matches:
+        if not number_text:
+            continue
+        try:
+            value = float(number_text.replace(",", ""))
+        except ValueError:
+            continue
+        if suffix.lower() == "k":
+            value *= 1000
+        elif suffix.lower() == "m":
+            value *= 1000000
+        elif is_lpa:
+            value *= 100000
+        values.append(int(value))
+
+    if not values:
+        return {"min": 0, "max": 0}
+    return {"min": min(values), "max": max(values)}
+
+
+def normalize_job_salary_to_inr(job: Dict[str, Any]) -> Dict[str, int]:
+    salary_text = ensure_text(job.get("salary_text"), "")
+    salary_currency = (job.get("salary_currency") or detect_currency_from_text(salary_text, "INR")).upper()
+    min_salary = safe_int(job.get("salary_min"), 0)
+    max_salary = safe_int(job.get("salary_max"), 0)
+
+    if not (min_salary or max_salary):
+        parsed = parse_salary_range_from_text(salary_text)
+        min_salary = parsed["min"]
+        max_salary = parsed["max"]
+
+    min_inr = convert_salary_to_inr(min_salary, salary_currency)
+    max_inr = convert_salary_to_inr(max_salary, salary_currency)
+    return {
+        "salary_currency": salary_currency,
+        "salary_min_normalized_inr": min_inr,
+        "salary_max_normalized_inr": max_inr,
+    }
 
 
 def ensure_text(value: Any, fallback: str = "") -> str:
@@ -374,10 +524,11 @@ def score_job_against_profile(job: Dict[str, Any], profile: Dict[str, Any], pref
     else:
         location_score = 100 if "remote" not in location else 55
 
-    salary_min = safe_int(job.get("salary_min"), 0)
-    salary_max = safe_int(job.get("salary_max"), 0)
-    pref_min = safe_int(preferences.get("salary_min"), 0)
-    pref_max = safe_int(preferences.get("salary_max"), 0)
+    salary_info = normalize_job_salary_to_inr(job)
+    salary_min = salary_info["salary_min_normalized_inr"]
+    salary_max = salary_info["salary_max_normalized_inr"]
+    pref_min = normalize_lpa_or_annual_inr(preferences.get("salary_min"))
+    pref_max = normalize_lpa_or_annual_inr(preferences.get("salary_max"))
     salary_score = 70
     if salary_min or salary_max:
         lower = salary_min or salary_max
@@ -398,6 +549,11 @@ def score_job_against_profile(job: Dict[str, Any], profile: Dict[str, Any], pref
             "title_score": title_score,
             "location_score": location_score,
             "salary_score": salary_score,
+            "job_salary_currency": salary_info["salary_currency"],
+            "job_salary_min_inr": salary_min,
+            "job_salary_max_inr": salary_max,
+            "pref_salary_min_inr": pref_min,
+            "pref_salary_max_inr": pref_max,
         },
     }
 
@@ -515,6 +671,9 @@ async def fetch_remotive_jobs(preferences: Dict[str, Any]) -> List[Dict[str, Any
     jobs: List[Dict[str, Any]] = []
     for item in payload.get("jobs", []):
         description = item.get("description", "")
+        salary_text = item.get("salary") or ""
+        salary_currency = detect_currency_from_text(salary_text, "USD")
+        parsed_salary = parse_salary_range_from_text(salary_text)
         jobs.append(
             {
                 "source": "remotive",
@@ -524,9 +683,10 @@ async def fetch_remotive_jobs(preferences: Dict[str, Any]) -> List[Dict[str, Any
                 "location": item.get("candidate_required_location") or "Remote",
                 "description": description,
                 "job_type": item.get("job_type") or "",
-                "salary_min": 0,
-                "salary_max": 0,
-                "salary_text": item.get("salary") or "",
+                "salary_min": parsed_salary["min"],
+                "salary_max": parsed_salary["max"],
+                "salary_text": salary_text,
+                "salary_currency": salary_currency,
                 "industry": item.get("category") or "",
                 "apply_url": item.get("url") or "",
                 "application_email": extract_email_from_text(description),
@@ -552,6 +712,7 @@ async def fetch_adzuna_jobs(preferences: Dict[str, Any], settings: Dict[str, Any
         where = preferences["location_preferences"][0]
 
     country = (settings.get("adzuna_country") or "us").lower()
+    adzuna_currency = ADZUNA_COUNTRY_CURRENCY.get(country, "USD")
     endpoint = f"https://api.adzuna.com/v1/api/jobs/{country}/search/1"
     params = {
         "app_id": app_id,
@@ -561,6 +722,9 @@ async def fetch_adzuna_jobs(preferences: Dict[str, Any], settings: Dict[str, Any
         "results_per_page": 30,
         "content-type": "application/json",
     }
+    pref_min_inr = normalize_lpa_or_annual_inr(preferences.get("salary_min"))
+    if pref_min_inr > 0:
+        params["salary_min"] = max(1, convert_inr_to_currency(pref_min_inr, adzuna_currency))
 
     async with httpx.AsyncClient(timeout=40.0) as http:
         response = await http.get(endpoint, params=params)
@@ -585,6 +749,7 @@ async def fetch_adzuna_jobs(preferences: Dict[str, Any], settings: Dict[str, Any
                 "salary_min": safe_int(item.get("salary_min"), 0),
                 "salary_max": safe_int(item.get("salary_max"), 0),
                 "salary_text": "",
+                "salary_currency": adzuna_currency,
                 "industry": item.get("category", {}).get("label", ""),
                 "apply_url": item.get("redirect_url") or "",
                 "application_email": extract_email_from_text(description),
@@ -618,6 +783,7 @@ async def run_job_discovery() -> Dict[str, Any]:
 
     for job in deduped.values():
         score = score_job_against_profile(job, profile, preferences)
+        salary_norm = normalize_job_salary_to_inr(job)
         now = utc_now_iso()
         filter_query = {
             "user_id": DEFAULT_USER_ID,
@@ -634,6 +800,9 @@ async def run_job_discovery() -> Dict[str, Any]:
             "match_score": score["match_score"],
             "matched_skills": score["matched_skills"],
             "score_breakdown": score["score_breakdown"],
+            "salary_currency": salary_norm["salary_currency"],
+            "salary_min_normalized_inr": salary_norm["salary_min_normalized_inr"],
+            "salary_max_normalized_inr": salary_norm["salary_max_normalized_inr"],
             "updated_at": now,
             "discovered_at": now,
         }
