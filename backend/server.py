@@ -839,6 +839,11 @@ ATS_DISCOVERY_SOURCES = {
 }
 
 
+def enabled_sources_from_settings(settings: Dict[str, Any]) -> List[str]:
+    toggles = settings.get("source_toggles", {}) if isinstance(settings, dict) else {}
+    return sorted([src for src in ALL_DISCOVERY_SOURCES if bool(toggles.get(src, True))])
+
+
 async def run_job_discovery(selected_sources: Optional[List[str]] = None) -> Dict[str, Any]:
     preferences = await get_preferences()
     settings = await get_settings()
@@ -1977,15 +1982,21 @@ async def clear_jobs_cache_endpoint() -> Dict[str, int]:
 
 @api_router.get("/jobs")
 async def list_jobs(min_score: int = 0, source: str = "") -> List[Dict[str, Any]]:
+    settings = await get_settings()
+    enabled_sources = set(enabled_sources_from_settings(settings))
+
     query: Dict[str, Any] = {
         "user_id": DEFAULT_USER_ID,
         "match_score": {"$gte": min_score},
+        "source": {"$in": sorted(enabled_sources)},
         "$or": [
             {"application_email": {"$exists": True, "$nin": ["", None]}},
             {"apply_url": {"$exists": True, "$nin": ["", None]}},
         ],
     }
     if source:
+        if source not in enabled_sources:
+            return []
         query["source"] = source
     # Avoid Mongo in-memory sort failures on large collections with heavy raw payloads.
     jobs = await db.jobs.find(query, {"_id": 0, "raw": 0}).to_list(2000)
@@ -2043,7 +2054,12 @@ async def run_auto_apply(fast_mode: bool = True) -> Dict[str, Any]:
 
 @api_router.get("/applications")
 async def list_applications() -> List[Dict[str, Any]]:
-    applications = await db.applications.find({"user_id": DEFAULT_USER_ID}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    settings = await get_settings()
+    enabled_sources = enabled_sources_from_settings(settings)
+    applications = await db.applications.find(
+        {"user_id": DEFAULT_USER_ID, "source": {"$in": enabled_sources}},
+        {"_id": 0},
+    ).sort("created_at", -1).to_list(500)
     return applications
 
 
@@ -2162,7 +2178,12 @@ async def send_followup_for_one(application_id: str) -> Dict[str, Any]:
 
 @api_router.get("/applications/kanban")
 async def applications_kanban() -> Dict[str, List[Dict[str, Any]]]:
-    applications = await db.applications.find({"user_id": DEFAULT_USER_ID}, {"_id": 0}).to_list(1000)
+    settings = await get_settings()
+    enabled_sources = enabled_sources_from_settings(settings)
+    applications = await db.applications.find(
+        {"user_id": DEFAULT_USER_ID, "source": {"$in": enabled_sources}},
+        {"_id": 0},
+    ).to_list(1000)
     by_status: Dict[str, List[Dict[str, Any]]] = {status: [] for status in KANBAN_STATUSES}
     for app_doc in applications:
         status = app_doc.get("status", "Discovered")
@@ -2184,8 +2205,17 @@ async def update_application_status(application_id: str, payload: ApplicationSta
 
 @api_router.get("/dashboard/metrics")
 async def dashboard_metrics() -> Dict[str, Any]:
-    apps = await db.applications.find({"user_id": DEFAULT_USER_ID}, {"_id": 0}).to_list(1000)
-    jobs = await db.jobs.find({"user_id": DEFAULT_USER_ID}, {"_id": 0}).to_list(2000)
+    settings = await get_settings()
+    enabled_sources = enabled_sources_from_settings(settings)
+
+    apps = await db.applications.find(
+        {"user_id": DEFAULT_USER_ID, "source": {"$in": enabled_sources}},
+        {"_id": 0},
+    ).to_list(1000)
+    jobs = await db.jobs.find(
+        {"user_id": DEFAULT_USER_ID, "source": {"$in": enabled_sources}},
+        {"_id": 0},
+    ).to_list(2000)
     attempts = await db.application_attempts.find({}, {"_id": 0}).to_list(2000)
 
     total_applied = len([a for a in apps if a.get("status") in {"Applied", "Under Review", "Interview Scheduled", "Offer Received"}])
