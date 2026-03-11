@@ -18,6 +18,17 @@ export default function ProfilePage() {
   const [uploading, setUploading] = useState(false);
   const [profile, setProfile] = useState(null);
   const [error, setError] = useState("");
+  const [savingParsed, setSavingParsed] = useState(false);
+  const [parsedForm, setParsedForm] = useState({
+    skills_technical: "",
+    skills_soft: "",
+    certifications: "",
+    projects: "",
+    languages: "",
+    work_experience_json: "[]",
+    education_json: "[]",
+    summary: "",
+  });
   const [preferences, setPreferences] = useState({
     target_job_titles: "",
     preferred_industries: "",
@@ -36,6 +47,16 @@ export default function ProfilePage() {
       setError("");
       const [profileRes, preferenceRes] = await Promise.all([api.getProfile(), api.getPreferences()]);
       setProfile(profileRes);
+      setParsedForm({
+        skills_technical: toCsv(profileRes?.parsed?.skills_technical || []),
+        skills_soft: toCsv(profileRes?.parsed?.skills_soft || []),
+        certifications: toCsv(profileRes?.parsed?.certifications || []),
+        projects: toCsv(profileRes?.parsed?.projects || []),
+        languages: toCsv(profileRes?.parsed?.languages || []),
+        work_experience_json: JSON.stringify(profileRes?.parsed?.work_experience || [], null, 2),
+        education_json: JSON.stringify(profileRes?.parsed?.education || [], null, 2),
+        summary: profileRes?.parsed?.summary || "",
+      });
       setPreferences({
         ...preferenceRes,
         target_job_titles: toCsv(preferenceRes.target_job_titles),
@@ -63,11 +84,58 @@ export default function ProfilePage() {
       setUploading(true);
       const response = await api.uploadCv(formData);
       setProfile(response);
+      setParsedForm({
+        skills_technical: toCsv(response?.parsed?.skills_technical || []),
+        skills_soft: toCsv(response?.parsed?.skills_soft || []),
+        certifications: toCsv(response?.parsed?.certifications || []),
+        projects: toCsv(response?.parsed?.projects || []),
+        languages: toCsv(response?.parsed?.languages || []),
+        work_experience_json: JSON.stringify(response?.parsed?.work_experience || [], null, 2),
+        education_json: JSON.stringify(response?.parsed?.education || [], null, 2),
+        summary: response?.parsed?.summary || "",
+      });
       toast.success("CV uploaded and parsed successfully.");
     } catch (error) {
       toast.error(error?.response?.data?.detail || "Upload failed.");
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleParsedSave = async () => {
+    let work_experience = [];
+    let education = [];
+    try {
+      work_experience = JSON.parse(parsedForm.work_experience_json || "[]");
+      education = JSON.parse(parsedForm.education_json || "[]");
+      if (!Array.isArray(work_experience) || !Array.isArray(education)) {
+        throw new Error("Invalid structure");
+      }
+    } catch {
+      toast.error("Work experience and education must be valid JSON arrays.");
+      return;
+    }
+
+    const payload = {
+      skills_technical: fromCsv(parsedForm.skills_technical || ""),
+      skills_soft: fromCsv(parsedForm.skills_soft || ""),
+      certifications: fromCsv(parsedForm.certifications || ""),
+      projects: fromCsv(parsedForm.projects || ""),
+      languages: fromCsv(parsedForm.languages || ""),
+      work_experience,
+      education,
+      summary: parsedForm.summary || "",
+    };
+
+    try {
+      setSavingParsed(true);
+      const updated = await api.updateParsedProfile(payload);
+      setProfile(updated);
+      toast.success("Parsed profile updated.");
+    } catch {
+      toast.error("Could not save parsed profile.");
+    } finally {
+      setSavingParsed(false);
     }
   };
 
@@ -136,12 +204,90 @@ export default function ProfilePage() {
             <p className="mt-2 text-sm text-slate-300" data-testid="parsed-skills-preview">
               Parsed skills: {(profile?.parsed?.skills_technical || []).slice(0, 10).join(", ") || "—"}
             </p>
-            <Textarea
-              className="mt-3 min-h-36"
-              value={profile?.parsed?.summary || ""}
-              readOnly
-              data-testid="parsed-summary-text"
+            <Textarea className="mt-3 min-h-36" value={profile?.parsed?.summary || ""} readOnly data-testid="parsed-summary-text" />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-white/10 bg-white/[0.04]" data-testid="parsed-edit-card">
+        <CardHeader>
+          <CardTitle data-testid="parsed-edit-title">Parsed Profile (Editable)</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Technical Skills (comma-separated)</p>
+            <Input
+              value={parsedForm.skills_technical}
+              onChange={(e) => setParsedForm((s) => ({ ...s, skills_technical: e.target.value }))}
+              data-testid="parsed-edit-skills-technical"
             />
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Soft Skills (comma-separated)</p>
+            <Input
+              value={parsedForm.skills_soft}
+              onChange={(e) => setParsedForm((s) => ({ ...s, skills_soft: e.target.value }))}
+              data-testid="parsed-edit-skills-soft"
+            />
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Certifications (comma-separated)</p>
+            <Input
+              value={parsedForm.certifications}
+              onChange={(e) => setParsedForm((s) => ({ ...s, certifications: e.target.value }))}
+              data-testid="parsed-edit-certifications"
+            />
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Languages (comma-separated)</p>
+            <Input
+              value={parsedForm.languages}
+              onChange={(e) => setParsedForm((s) => ({ ...s, languages: e.target.value }))}
+              data-testid="parsed-edit-languages"
+            />
+          </div>
+          <div className="space-y-2 md:col-span-2">
+            <p className="text-xs text-slate-400">Projects (comma-separated)</p>
+            <Input
+              value={parsedForm.projects}
+              onChange={(e) => setParsedForm((s) => ({ ...s, projects: e.target.value }))}
+              data-testid="parsed-edit-projects"
+            />
+          </div>
+          <div className="space-y-2 md:col-span-2">
+            <p className="text-xs text-slate-400">Summary</p>
+            <Textarea
+              className="min-h-32"
+              value={parsedForm.summary}
+              onChange={(e) => setParsedForm((s) => ({ ...s, summary: e.target.value }))}
+              data-testid="parsed-edit-summary"
+            />
+          </div>
+          <div className="space-y-2 md:col-span-2">
+            <p className="text-xs text-slate-400">Work Experience (JSON array)</p>
+            <Textarea
+              className="min-h-36 font-mono text-xs"
+              value={parsedForm.work_experience_json}
+              onChange={(e) => setParsedForm((s) => ({ ...s, work_experience_json: e.target.value }))}
+              data-testid="parsed-edit-work-experience-json"
+            />
+          </div>
+          <div className="space-y-2 md:col-span-2">
+            <p className="text-xs text-slate-400">Education (JSON array)</p>
+            <Textarea
+              className="min-h-32 font-mono text-xs"
+              value={parsedForm.education_json}
+              onChange={(e) => setParsedForm((s) => ({ ...s, education_json: e.target.value }))}
+              data-testid="parsed-edit-education-json"
+            />
+          </div>
+          <p className="text-xs text-slate-500 md:col-span-2">
+            Note: Use valid JSON arrays for Work Experience and Education.
+          </p>
+          <div className="md:col-span-2">
+            <Button onClick={handleParsedSave} disabled={savingParsed} data-testid="parsed-edit-save-button">
+              {savingParsed ? "Saving..." : "Save Parsed Profile"}
+            </Button>
           </div>
         </CardContent>
       </Card>

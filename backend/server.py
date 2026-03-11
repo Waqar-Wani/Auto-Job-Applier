@@ -29,6 +29,12 @@ from reportlab.pdfgen import canvas
 from starlette.middleware.cors import CORSMiddleware
 
 try:
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
+except Exception:  # pragma: no cover - optional dependency
+    LlmChat = None
+    UserMessage = None
+
+try:
     from ats.discovery import discover_ats_jobs
     from ats.models import DiscoveryRunResult
 except ImportError:  # pragma: no cover - fallback for alternative module roots
@@ -122,6 +128,17 @@ class UserProfileResponse(BaseModel):
     resume_text: str = ""
     parsed: ParsedProfile
     updated_at: str
+
+
+class ParsedProfileUpdatePayload(BaseModel):
+    skills_technical: List[str] = Field(default_factory=list)
+    skills_soft: List[str] = Field(default_factory=list)
+    work_experience: List[Dict[str, Any]] = Field(default_factory=list)
+    education: List[Dict[str, Any]] = Field(default_factory=list)
+    certifications: List[str] = Field(default_factory=list)
+    projects: List[str] = Field(default_factory=list)
+    languages: List[str] = Field(default_factory=list)
+    summary: str = ""
 
 
 class PreferencePayload(BaseModel):
@@ -479,6 +496,28 @@ def extract_docx_text(file_bytes: bytes) -> str:
 
 
 def profile_fallback_parser(resume_text: str) -> Dict[str, Any]:
+    section_pattern = re.compile(
+        r"(?im)^(professional summary|key skills|professional experience|projects|education|certifications)\s*$"
+    )
+    heading_matches = list(section_pattern.finditer(resume_text or ""))
+    sections: Dict[str, str] = {}
+
+    if heading_matches:
+        for idx, match in enumerate(heading_matches):
+            section_name = match.group(1).strip().lower()
+            start = match.end()
+            end = heading_matches[idx + 1].start() if idx + 1 < len(heading_matches) else len(resume_text)
+            sections[section_name] = (resume_text[start:end] or "").strip()
+
+    def extract_list_lines(block: str) -> List[str]:
+        values: List[str] = []
+        for raw_line in (block or "").splitlines():
+            line = re.sub(r"^\s*[•\-\u2022]\s*", "", raw_line).strip()
+            if not line:
+                continue
+            values.append(line)
+        return values
+
     sample_skills = [
         "Python",
         "JavaScript",
@@ -491,21 +530,68 @@ def profile_fallback_parser(resume_text: str) -> Dict[str, Any]:
     ]
     lowered = resume_text.lower()
     found = [skill for skill in sample_skills if skill.lower() in lowered]
+    skills_block = sections.get("key skills", "")
+    extracted_skill_tokens: List[str] = []
+    for line in extract_list_lines(skills_block):
+        if ":" in line:
+            line = line.split(":", 1)[1]
+        extracted_skill_tokens.extend([token.strip() for token in line.split(",") if token.strip()])
+
+    normalized_skills = []
+    seen_skills = set()
+    for skill in [*found, *extracted_skill_tokens]:
+        cleaned = skill.strip()
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key in seen_skills:
+            continue
+        seen_skills.add(key)
+        normalized_skills.append(cleaned)
+
+    work_experience: List[Dict[str, Any]] = []
+    for line in extract_list_lines(sections.get("professional experience", "")):
+        match = re.match(r"^(.*?)\s+[—-]\s+(.*?)\s+([A-Za-z]{3,9}\s+\d{4}\s*[–-]\s*(?:[A-Za-z]{3,9}\s+\d{4}|Present))$", line)
+        if match:
+            work_experience.append(
+                {
+                    "company": match.group(1).strip(),
+                    "role": match.group(2).strip(),
+                    "duration": match.group(3).strip(),
+                    "achievements": [],
+                }
+            )
+
+    education: List[Dict[str, Any]] = []
+    for line in extract_list_lines(sections.get("education", "")):
+        parts = [part.strip() for part in re.split(r"\s+[—-]\s+", line, maxsplit=1)]
+        education.append(
+            {
+                "degree": parts[0],
+                "institution": parts[1] if len(parts) > 1 else "",
+                "year": "",
+            }
+        )
+
+    certifications = extract_list_lines(sections.get("certifications", ""))
+    projects = extract_list_lines(sections.get("projects", ""))
+    languages = ["English"] if "english" in lowered else []
+
     return {
-        "skills_technical": [skill for skill in found if skill not in {"Communication"}],
+        "skills_technical": [skill for skill in normalized_skills if skill.lower() not in {"communication"}],
         "skills_soft": ["Communication"] if "communication" in lowered else [],
-        "work_experience": [],
-        "education": [],
-        "certifications": [],
-        "projects": [],
-        "languages": ["English"],
-        "summary": resume_text[:500],
+        "work_experience": work_experience,
+        "education": education,
+        "certifications": certifications,
+        "projects": projects,
+        "languages": languages,
+        "summary": (sections.get("professional summary", "") or resume_text)[:1200],
     }
 
 
 async def ai_json_response(system_message: str, prompt: str, fallback: Dict[str, Any]) -> Dict[str, Any]:
     api_key = os.environ.get("EMERGENT_LLM_KEY")
-    if not api_key:
+    if not api_key or LlmChat is None or UserMessage is None:
         return fallback
 
     try:
@@ -537,6 +623,14 @@ async def parse_resume_with_ai(resume_text: str) -> Dict[str, Any]:
     result = await ai_json_response("You are an expert resume parser.", prompt, fallback)
     for key, default in fallback.items():
         result.setdefault(key, default)
+    for key in ["skills_technical", "skills_soft", "certifications", "projects", "languages"]:
+        if not isinstance(result.get(key), list):
+            result[key] = fallback.get(key, [])
+    for key in ["work_experience", "education"]:
+        if not isinstance(result.get(key), list):
+            result[key] = fallback.get(key, [])
+    if not isinstance(result.get("summary"), str):
+        result["summary"] = fallback.get("summary", "")
     return result
 
 
@@ -1958,6 +2052,18 @@ async def upload_cv(file: UploadFile = File(...)) -> UserProfileResponse:
 
     await run_job_discovery()
     return UserProfileResponse(**profile_doc)
+
+
+@api_router.put("/profile/parsed", response_model=UserProfileResponse)
+async def update_parsed_profile(payload: ParsedProfileUpdatePayload) -> UserProfileResponse:
+    profile = await get_profile()
+    updated = {
+        **profile,
+        "parsed": payload.model_dump(),
+        "updated_at": utc_now_iso(),
+    }
+    await db.user_profiles.update_one({"user_id": DEFAULT_USER_ID}, {"$set": updated}, upsert=True)
+    return UserProfileResponse(**updated)
 
 
 @api_router.get("/preferences")

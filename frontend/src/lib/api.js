@@ -14,6 +14,8 @@ export const api = {
         headers: { "Content-Type": "multipart/form-data" },
       })
       .then((res) => res.data),
+  updateParsedProfile: (payload) =>
+    client.put("/profile/parsed", payload).then((res) => res.data),
   getPreferences: () => client.get("/preferences").then((res) => res.data),
   updatePreferences: (payload) =>
     client.put("/preferences", payload).then((res) => res.data),
