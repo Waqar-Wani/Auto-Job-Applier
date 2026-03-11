@@ -38,6 +38,7 @@ except ImportError:  # pragma: no cover - fallback for alternative module roots
 ROOT_DIR = Path(__file__).parent
 GENERATED_DIR = ROOT_DIR / "generated_docs"
 PROOF_DIR = ROOT_DIR / "proofs"
+UPLOADED_RESUME_DIR = ROOT_DIR / "uploaded_resumes"
 load_dotenv(ROOT_DIR / ".env")
 
 mongo_url = os.environ["MONGO_URL"]
@@ -1062,6 +1063,81 @@ async def generate_documents_for_job(job_id: str) -> Dict[str, Any]:
     return doc_record
 
 
+def create_resume_fallback_pdf(profile: Dict[str, Any], job: Dict[str, Any]) -> Path:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    fallback_path = GENERATED_DIR / f"resume_fallback_{job.get('id', 'job')}_{timestamp}.pdf"
+    body = (profile.get("resume_text") or "").strip()
+    if not body:
+        body = "Resume unavailable."
+    create_text_pdf(
+        fallback_path,
+        f"Resume • {job.get('title', 'Application')}",
+        body,
+    )
+    return fallback_path
+
+
+def create_cover_fallback_pdf(job: Dict[str, Any]) -> Path:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    fallback_path = GENERATED_DIR / f"cover_fallback_{job.get('id', 'job')}_{timestamp}.pdf"
+    body = (
+        f"Dear Hiring Team at {job.get('company', 'the company')},\n\n"
+        f"I am excited to apply for the {job.get('title', 'role')} position. "
+        "Please find my resume attached.\n\n"
+        "Thank you for your time and consideration."
+    )
+    create_text_pdf(fallback_path, f"Cover Letter • {job.get('company', '')}", body)
+    return fallback_path
+
+
+async def ensure_document_assets(
+    job: Dict[str, Any],
+    application: Dict[str, Any],
+    profile: Dict[str, Any],
+    document: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    doc = dict(document or {})
+    resume_path = Path(doc.get("resume_pdf_path", "")).expanduser() if doc.get("resume_pdf_path") else Path("")
+    cover_path = Path(doc.get("cover_pdf_path", "")).expanduser() if doc.get("cover_pdf_path") else Path("")
+
+    if not resume_path.exists() or not cover_path.exists():
+        try:
+            regenerated = await generate_documents_for_job(job["id"])
+            doc = dict(regenerated or {})
+            resume_path = Path(doc.get("resume_pdf_path", "")).expanduser() if doc.get("resume_pdf_path") else Path("")
+            cover_path = Path(doc.get("cover_pdf_path", "")).expanduser() if doc.get("cover_pdf_path") else Path("")
+        except Exception:
+            # Best-effort fallback to stored uploaded resume / profile text.
+            pass
+
+    if not resume_path.exists():
+        uploaded_resume_path = Path(profile.get("uploaded_resume_path", "")).expanduser() if profile.get("uploaded_resume_path") else Path("")
+        if uploaded_resume_path.exists() and uploaded_resume_path.suffix.lower() == ".pdf":
+            resume_path = uploaded_resume_path
+        else:
+            resume_path = create_resume_fallback_pdf(profile, job)
+
+    if not cover_path.exists():
+        cover_path = create_cover_fallback_pdf(job)
+
+    doc["resume_pdf_path"] = str(resume_path)
+    doc["cover_pdf_path"] = str(cover_path)
+    if not doc.get("id"):
+        doc["id"] = str(uuid.uuid4())
+    if not doc.get("job_id"):
+        doc["job_id"] = job.get("id", application.get("job_id", ""))
+    if not doc.get("user_id"):
+        doc["user_id"] = DEFAULT_USER_ID
+    doc["created_at"] = doc.get("created_at") or utc_now_iso()
+
+    await db.documents.update_one(
+        {"id": doc["id"], "user_id": DEFAULT_USER_ID},
+        {"$set": doc},
+        upsert=True,
+    )
+    return doc
+
+
 async def send_email_via_resend(
     to_email: str,
     settings: Dict[str, Any],
@@ -1605,8 +1681,7 @@ async def process_one_application(queue_item: Dict[str, Any]) -> Dict[str, Any]:
         {"_id": 0},
         sort=[("created_at", -1)],
     )
-    if not document:
-        document = await generate_documents_for_job(job["id"])
+    document = await ensure_document_assets(job, application, profile, document)
 
     method = "direct_apply"
     success = False
@@ -1801,6 +1876,12 @@ async def upload_cv(file: UploadFile = File(...)) -> UserProfileResponse:
         raise HTTPException(status_code=400, detail="Only PDF and DOCX are supported.")
 
     content = await file.read()
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    saved_name = f"{DEFAULT_USER_ID}_{timestamp}{suffix}"
+    saved_path = UPLOADED_RESUME_DIR / saved_name
+    saved_path.parent.mkdir(parents=True, exist_ok=True)
+    saved_path.write_bytes(content)
+
     if suffix == ".pdf":
         resume_text = extract_pdf_text(content)
     else:
@@ -1815,6 +1896,7 @@ async def upload_cv(file: UploadFile = File(...)) -> UserProfileResponse:
         "id": str(uuid.uuid4()),
         "user_id": DEFAULT_USER_ID,
         "filename": file.filename,
+        "uploaded_resume_path": str(saved_path),
         "resume_text": resume_text,
         "parsed": parsed_profile,
         "updated_at": now,
@@ -2283,6 +2365,7 @@ logger = logging.getLogger(__name__)
 async def startup_event() -> None:
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
     PROOF_DIR.mkdir(parents=True, exist_ok=True)
+    UPLOADED_RESUME_DIR.mkdir(parents=True, exist_ok=True)
 
     await db.jobs.create_index([("user_id", 1), ("source", 1), ("external_id", 1)], unique=True)
     await db.jobs.create_index([("user_id", 1), ("match_score", -1)])
