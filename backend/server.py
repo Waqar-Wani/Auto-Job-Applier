@@ -3,6 +3,7 @@ import base64
 import io
 import json
 import logging
+import mimetypes
 import os
 import random
 import re
@@ -1237,47 +1238,52 @@ async def ensure_document_assets(
     return doc
 
 
-async def send_email_via_resend(
+async def send_application_via_gmail(
     to_email: str,
-    settings: Dict[str, Any],
     job: Dict[str, Any],
     document: Dict[str, Any],
 ) -> Dict[str, Any]:
-    resend_key = settings.get("resend_api_key")
-    if not resend_key:
-        raise RuntimeError("Resend API key not configured in settings.")
+    token = await ensure_gmail_access_token()
 
-    resume_path = Path(document["resume_pdf_path"])
-    cover_path = Path(document["cover_pdf_path"])
-    with open(resume_path, "rb") as resume_file:
-        resume_b64 = base64.b64encode(resume_file.read()).decode("utf-8")
-    with open(cover_path, "rb") as cover_file:
-        cover_b64 = base64.b64encode(cover_file.read()).decode("utf-8")
+    message = EmailMessage()
+    message["To"] = to_email
+    message["Subject"] = f"Application: {job.get('title')} - {job.get('company')}"
+    message.set_content(
+        "Hello,\n\n"
+        f"Please find my application for the {job.get('title')} role at {job.get('company')}.\n\n"
+        "Best regards,\n"
+    )
 
-    payload = {
-        "from": settings.get("sender_email") or "onboarding@resend.dev",
-        "to": [to_email],
-        "subject": f"Application: {job.get('title')} - {job.get('company')}",
-        "html": (
-            f"<p>Hello,</p><p>Please find my application for the <strong>{job.get('title')}</strong> role at "
-            f"<strong>{job.get('company')}</strong>.</p><p>Best regards,</p>"
-        ),
-        "attachments": [
-            {"filename": "resume.pdf", "content": resume_b64},
-            {"filename": "cover_letter.pdf", "content": cover_b64},
-        ],
-    }
+    attachments = [
+        ("resume.pdf", Path(document.get("resume_pdf_path", ""))),
+        ("cover_letter.pdf", Path(document.get("cover_pdf_path", ""))),
+    ]
+    for fallback_name, file_path in attachments:
+        if not file_path.exists():
+            continue
+        guessed_type, _ = mimetypes.guess_type(str(file_path))
+        maintype, subtype = ("application", "octet-stream")
+        if guessed_type and "/" in guessed_type:
+            maintype, subtype = guessed_type.split("/", 1)
+        with open(file_path, "rb") as fh:
+            message.add_attachment(
+                fh.read(),
+                maintype=maintype,
+                subtype=subtype,
+                filename=file_path.name or fallback_name,
+            )
 
+    raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
     async with httpx.AsyncClient(timeout=40.0) as http:
         response = await http.post(
-            "https://api.resend.com/emails",
-            headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
-            json=payload,
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"raw": raw},
         )
         response.raise_for_status()
-        data = response.json()
+        payload = response.json()
 
-    return {"provider": "resend", "message_id": data.get("id", ""), "raw": data}
+    return {"provider": "gmail", "message_id": payload.get("id", ""), "raw": payload}
 
 
 async def fill_first_available(page: Any, selectors: List[str], value: str) -> bool:
@@ -1795,7 +1801,7 @@ async def process_one_application(queue_item: Dict[str, Any]) -> Dict[str, Any]:
 
         if email_target:
             method = "email"
-            email_result = await send_email_via_resend(email_target, settings, job, document)
+            email_result = await send_application_via_gmail(email_target, job, document)
             success = True
             proof = email_result.get("message_id", "")
         else:
