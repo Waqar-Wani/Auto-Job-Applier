@@ -1614,9 +1614,14 @@ async def process_one_application(queue_item: Dict[str, Any]) -> Dict[str, Any]:
     error = ""
 
     try:
-        if job.get("application_email"):
+        email_target = ensure_text(job.get("application_email"), "").strip()
+        if not email_target:
+            email_target = ensure_text(application.get("recruiter_email"), "").strip()
+        email_target = extract_email_from_text(email_target) or ""
+
+        if email_target:
             method = "email"
-            email_result = await send_email_via_resend(job["application_email"], settings, job, document)
+            email_result = await send_email_via_resend(email_target, settings, job, document)
             success = True
             proof = email_result.get("message_id", "")
         else:
