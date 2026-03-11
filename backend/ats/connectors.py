@@ -15,6 +15,11 @@ def _text(value: Any) -> str:
     return str(value)
 
 
+def _is_http_url(value: str) -> bool:
+    candidate = (value or "").strip().lower()
+    return candidate.startswith("http://") or candidate.startswith("https://")
+
+
 def infer_remote_status(location: str, title: str, description: str) -> str:
     blob = f"{location} {title} {description}".lower()
     if "hybrid" in blob:
@@ -73,23 +78,66 @@ class GreenhouseConnector(ATSConnector):
         response = await client.get(url, params={"content": "true"})
         response.raise_for_status()
         data = response.json()
-        jobs = data.get("jobs", []) if isinstance(data, dict) else []
-        output: List[NormalizedJob] = []
+        jobs: List[Dict[str, Any]] = []
+        if isinstance(data, dict):
+            if isinstance(data.get("jobs"), list):
+                jobs.extend([item for item in data.get("jobs", []) if isinstance(item, dict)])
+            departments = data.get("departments", [])
+            if isinstance(departments, list):
+                for dept in departments:
+                    if not isinstance(dept, dict):
+                        continue
+                    dept_jobs = dept.get("jobs", [])
+                    if isinstance(dept_jobs, list):
+                        jobs.extend([item for item in dept_jobs if isinstance(item, dict)])
+
+        deduped_jobs: Dict[str, Dict[str, Any]] = {}
         for item in jobs:
+            dedupe_key = _text(item.get("id") or item.get("internal_job_id") or item.get("absolute_url"))
+            if dedupe_key and dedupe_key not in deduped_jobs:
+                deduped_jobs[dedupe_key] = item
+
+        output: List[NormalizedJob] = []
+        for item in deduped_jobs.values():
             title = _text(item.get("title"))
             description = _text(item.get("content"))
-            location = _text((item.get("location") or {}).get("name"))
+            metadata_locations: List[str] = []
+            for meta in item.get("metadata", []) if isinstance(item.get("metadata"), list) else []:
+                if not isinstance(meta, dict):
+                    continue
+                if _text(meta.get("name")).strip().lower() != "job posting location":
+                    continue
+                meta_value = meta.get("value")
+                if isinstance(meta_value, list):
+                    metadata_locations.extend([_text(loc) for loc in meta_value if _text(loc).strip()])
+                elif _text(meta_value).strip():
+                    metadata_locations.append(_text(meta_value).strip())
+
+            fallback_location = _text((item.get("location") or {}).get("name"))
+            if metadata_locations:
+                location = " | ".join(dict.fromkeys(metadata_locations))
+            else:
+                location = fallback_location
+
+            job_id = _text(item.get("id"))
+            absolute_url = _text(item.get("absolute_url")).strip()
+            if not _is_http_url(absolute_url):
+                # Fallback pattern from Greenhouse board URLs.
+                if not job_id:
+                    continue
+                absolute_url = f"https://boards.greenhouse.io/{company}/jobs/{job_id}"
+
             output.append(
                 NormalizedJob(
                     source=self.source_name,
-                    external_id=_text(item.get("id")),
+                    external_id=job_id or _text(item.get("internal_job_id")),
                     job_title=title,
-                    company=company,
+                    company=_text(item.get("company_name")) or company,
                     location=location,
                     remote_status=infer_remote_status(location, title, description),
                     salary=_extract_salary_from_text(description),
                     description=description,
-                    application_url=_text(item.get("absolute_url")),
+                    application_url=absolute_url,
                     raw=item if isinstance(item, dict) else {},
                 )
             )

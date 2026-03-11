@@ -1987,8 +1987,10 @@ async def list_jobs(min_score: int = 0, source: str = "") -> List[Dict[str, Any]
     }
     if source:
         query["source"] = source
-    jobs = await db.jobs.find(query, {"_id": 0}).sort("match_score", -1).to_list(500)
-    return jobs
+    # Avoid Mongo in-memory sort failures on large collections with heavy raw payloads.
+    jobs = await db.jobs.find(query, {"_id": 0, "raw": 0}).to_list(2000)
+    jobs.sort(key=lambda item: safe_int(item.get("match_score"), 0), reverse=True)
+    return jobs[:500]
 
 
 @api_router.get("/jobs/{job_id}")
@@ -2248,6 +2250,7 @@ async def startup_event() -> None:
     PROOF_DIR.mkdir(parents=True, exist_ok=True)
 
     await db.jobs.create_index([("user_id", 1), ("source", 1), ("external_id", 1)], unique=True)
+    await db.jobs.create_index([("user_id", 1), ("match_score", -1)])
     await db.applications.create_index([("user_id", 1), ("job_id", 1)], unique=True)
     await db.application_queue.create_index([("application_id", 1), ("status", 1)])
     await db.gmail_processed_messages.create_index([("user_id", 1), ("message_id", 1)], unique=True)
