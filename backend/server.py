@@ -460,6 +460,11 @@ def create_text_pdf(file_path: Path, title: str, body: str) -> None:
     pdf.save()
 
 
+def is_playwright_browser_missing(error_message: str) -> bool:
+    lowered = (error_message or "").lower()
+    return "playwright install" in lowered or "executable doesn't exist" in lowered
+
+
 def extract_pdf_text(file_bytes: bytes) -> str:
     reader = PdfReader(io.BytesIO(file_bytes))
     parts: List[str] = []
@@ -1742,6 +1747,20 @@ async def process_one_application(queue_item: Dict[str, Any]) -> Dict[str, Any]:
         )
         return {"application_id": application["id"], "success": True, "method": method}
 
+    if method == "direct_apply" and is_playwright_browser_missing(error):
+        await db.application_queue.update_one(
+            {"id": queue_item["id"]},
+            {
+                "$set": {
+                    "status": "failed",
+                    "updated_at": utc_now_iso(),
+                    "retry_count": queue_item.get("retry_count", 0),
+                    "failure_reason": "playwright_browser_missing",
+                }
+            },
+        )
+        return {"application_id": application["id"], "success": False, "error": error}
+
     retry_count = queue_item.get("retry_count", 0) + 1
     if retry_count >= 3:
         await db.application_queue.update_one(
@@ -1778,13 +1797,47 @@ async def process_queue(max_items: int = 5, fast_mode: bool = False) -> Dict[str
     if remaining <= 0:
         return {"processed": 0, "message": "Daily application limit reached."}
 
-    queue_items = await db.application_queue.find(
+    limit = min(max(max_items * 20, 50), 500)
+    queue_candidates = await db.application_queue.find(
         {
             "status": {"$in": ["pending", "retrying"]},
             "next_attempt_at": {"$lte": now.isoformat()},
         },
         {"_id": 0},
-    ).sort("created_at", 1).to_list(min(max_items, remaining))
+    ).sort("created_at", 1).to_list(limit)
+
+    if not queue_candidates:
+        return {"processed": 0, "message": "No queue items ready for processing."}
+
+    application_ids = [item.get("application_id") for item in queue_candidates if item.get("application_id")]
+    applications = await db.applications.find(
+        {"id": {"$in": application_ids}, "user_id": DEFAULT_USER_ID},
+        {"_id": 0, "id": 1, "job_id": 1, "recruiter_email": 1},
+    ).to_list(len(application_ids) or 1)
+    app_by_id = {item.get("id", ""): item for item in applications if item.get("id")}
+
+    job_ids = {item.get("job_id", "") for item in queue_candidates if item.get("job_id")}
+    job_ids.update({item.get("job_id", "") for item in applications if item.get("job_id")})
+    jobs = await db.jobs.find(
+        {"id": {"$in": [jid for jid in job_ids if jid]}},
+        {"_id": 0, "id": 1, "application_email": 1},
+    ).to_list(len(job_ids) or 1)
+    job_by_id = {item.get("id", ""): item for item in jobs if item.get("id")}
+
+    def email_capable(queue_item: Dict[str, Any]) -> bool:
+        app_doc = app_by_id.get(queue_item.get("application_id", ""), {})
+        job_doc = job_by_id.get(queue_item.get("job_id", "") or app_doc.get("job_id", ""), {})
+        email_text = ensure_text(job_doc.get("application_email"), "") or ensure_text(app_doc.get("recruiter_email"), "")
+        return bool(extract_email_from_text(email_text))
+
+    ordered_candidates = sorted(
+        queue_candidates,
+        key=lambda item: (
+            0 if email_capable(item) else 1,
+            item.get("created_at", ""),
+        ),
+    )
+    queue_items = ordered_candidates[: min(max_items, remaining)]
 
     results: List[Dict[str, Any]] = []
     for item in queue_items:
